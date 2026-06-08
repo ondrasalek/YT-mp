@@ -33,8 +33,8 @@ RUN pip install --no-cache-dir -r /app/python_core/requirements.txt
 # Rust binárka z builderu.
 COPY --from=builder /build/target/release/ytmp /usr/local/bin/ytmp
 
-# Adresář pro výstupy (mountuje se přes compose volume).
-RUN mkdir -p /app/downloads
+# Dočasné per-job soubory (mažou se po TTL); volitelně mountovatelné volume.
+RUN mkdir -p /app/data
 
 # Kde leží worker a jaký interpret použít (autodetekce by také našla python3).
 ENV YTMP_SCRIPT=/app/python_core/downloader.py
@@ -43,4 +43,4 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
 # Naslouchá na 0.0.0.0, aby byl server dostupný mimo kontejner.
-CMD ["ytmp", "serve", "--host", "0.0.0.0", "--port", "8080", "--python", "python3"]
+CMD ["ytmp", "serve", "--host", "0.0.0.0", "--port", "8080", "--python", "python3", "--data-dir", "/app/data"]

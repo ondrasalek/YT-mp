@@ -65,10 +65,9 @@ docker compose up --build
 # -> Web UI na http://127.0.0.1:8080/
 ```
 
-Stažené soubory se ukládají do `./downloads` na hostiteli (namountovaný volume).
-
-Pozn.: tlačítko **📁** (nativní dialog) v kontejneru nefunguje — běží headless,
-bez GUI. Cestu zadej ručně (výchozí `./downloads` se mapuje do volume).
+Soubory se streamují do prohlížeče uživatele; na serveru leží jen dočasně
+v `./data` (per-job, mazáno po 30 min). Volume `./data:/app/data` v compose je
+volitelný — hodí se pro přežití restartu nebo inspekci, jinak ho lze smazat.
 
 ## Použití — CLI (`download`)
 
@@ -96,8 +95,14 @@ bez GUI. Cestu zadej ručně (výchozí `./downloads` se mapuje do volume).
 ./target/release/ytmp serve --host 127.0.0.1 --port 8080 --python ./.venv/bin/python
 ```
 
-Otevři **http://127.0.0.1:8080/** — jednoduché webové rozhraní (vložené přímo
-v binárce) s formulářem a živým progress barem přes SSE.
+Otevři **http://127.0.0.1:8080/** — webové rozhraní (vložené přímo v binárce)
+s formulářem a živým progress barem přes SSE.
+
+**Model webové aplikace:** server stáhne médium do dočasného **per-job**
+adresáře (`--data-dir`, výchozí `./data`) a po dokončení ho **streamuje do
+prohlížeče uživatele** jako download. Uživatel je vzdálený — nic se na server
+neukládá natrvalo ani se nevybírá cílová složka. Dokončené úlohy (soubor i
+záznam) maže background sweeper po 30 minutách.
 
 ### Dev: obsazený port (`--force`)
 
@@ -116,35 +121,30 @@ Pokud při vývoji zůstane na portu viset starý server, příště to server p
 `--force` ukončí **pouze** proces, jehož příkazová řádka obsahuje `ytmp`
 (ověřeno přes `ps`/`lsof`) — cizí procesy na portu nikdy nezabíjí.
 
-### Výběr výstupní složky nativním dialogem
-
-Tlačítko **📁** vedle pole „Výstupní adresář" otevře **nativní systémový dialog**
-operačního systému (macOS `osascript`, Linux `zenity`/`kdialog`, Windows
-PowerShell `FolderBrowserDialog`). Vybraná cesta se doplní do pole.
-
-Funguje proto, že server běží na stejném stroji jako prohlížeč (lokální nástroj);
-dialog se otevře na ploše serveru. Při headless běhu (bez GUI) endpoint vrátí
-chybu a UI ponechá ruční zadání cesty.
+### Endpointy
 
 | Endpoint | Popis |
 |----------|-------|
 | `GET /` | webové UI (HTML + JS, konzumuje SSE) |
 | `GET /health` | liveness check |
-| `GET /pick-folder` | otevře **nativní** systémový dialog pro výběr složky a vrátí cestu |
-| `POST /jobs` | zařadí úlohu, vrátí `job_id` + `events_url` |
+| `POST /jobs` | zařadí úlohu, vrátí `job_id`, `events_url`, `download_url` |
 | `GET /jobs/{id}/events` | SSE proud JSON událostí (s replayem historie) |
+| `GET /jobs/{id}/download` | stáhne hotový soubor (příloha, správný `Content-Type`) |
 
 ```bash
 # 1) zařazení úlohy
 curl -X POST http://127.0.0.1:8080/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://youtu.be/VIDEO_ID","format":"mp3","output_dir":"./downloads"}'
-# -> {"job_id":"<uuid>","events_url":"/jobs/<uuid>/events"}
+  -d '{"url":"https://youtu.be/VIDEO_ID","format":"mp3"}'
+# -> {"job_id":"<uuid>","events_url":"/jobs/<uuid>/events","download_url":"/jobs/<uuid>/download"}
 
 # 2) sledování progressu (Server-Sent Events)
 curl -N http://127.0.0.1:8080/jobs/<uuid>/events
 # data: {"status":"downloading","progress":45.2,"speed":"2.3MiB/s","eta":"00:15"}
-# data: {"status":"finished","filepath":"/abs/path/output.mp3"}
+# data: {"status":"finished",...}
+
+# 3) stažení hotového souboru do prohlížeče/klienta
+curl -OJ http://127.0.0.1:8080/jobs/<uuid>/download
 ```
 
 Jádro je sdílené: stejný proud událostí napájí přes `JobObserver` buď terminálový

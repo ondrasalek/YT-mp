@@ -6,5 +6,7 @@
 __pycache__/
 *.pyc
 
-# Výstupy stahování
+# Výstupy / dočasná data
 /downloads/
+/data/
+/rust_backend/data/

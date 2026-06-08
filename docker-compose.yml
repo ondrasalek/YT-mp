@@ -3,13 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ytmp:0.1.0
+    image: ytmp:0.2.0
     container_name: ytmp
     ports:
       - "8080:8080"
     volumes:
-      # Stažené soubory se ukládají na hostitele (výchozí výstup je ./downloads).
-      - ./downloads:/app/downloads
+      # Dočasné per-job soubory (volitelné — mažou se po TTL i bez volume).
+      # Hodí se pro přežití restartu nebo inspekci; jinak lze řádek smazat.
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped

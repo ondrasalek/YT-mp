@@ -80,6 +80,10 @@ struct ServeArgs {
     #[arg(long)]
     force: bool,
 
+    /// Kořenový adresář pro dočasné per-job soubory (mažou se po TTL).
+    #[arg(long, default_value = "./data")]
+    data_dir: PathBuf,
+
     /// Cesta k Python interpretu (jinak se zkusí python3, pak python).
     #[arg(long)]
     python: Option<String>,
@@ -155,7 +159,7 @@ async fn run_serve(args: ServeArgs) -> ExitCode {
     };
 
     let addr = SocketAddr::new(args.host, args.port);
-    match api::serve(addr, python_cmd, script_path, args.force).await {
+    match api::serve(addr, python_cmd, script_path, args.data_dir, args.force).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("✖ Server selhal: {err}");

@@ -1,9 +1,15 @@
-//! HTTP API vrstva (axum) nad sdíleným orchestračním jádrem.
+//! HTTP API vrstva (axum) — webová aplikace.
+//!
+//! Model: server stáhne médium do dočasného **per-job** adresáře a soubor
+//! následně **streamuje do prohlížeče** uživatele. Uživatel je vzdálený,
+//! takže se nikam na server neukládá natrvalo ani nevybírá cílová složka.
 //!
 //! Endpointy:
-//!   * `GET  /health`            -> liveness check
-//!   * `POST /jobs`              -> zařadí úlohu, vrátí `job_id` a URL streamu
-//!   * `GET  /jobs/{id}/events`  -> SSE proud JSON událostí progressu
+//!   * `GET  /`                    -> webové UI
+//!   * `GET  /health`              -> liveness check
+//!   * `POST /jobs`                -> zařadí úlohu, vrátí `job_id`, URL streamu a downloadu
+//!   * `GET  /jobs/{id}/events`    -> SSE proud JSON událostí progressu
+//!   * `GET  /jobs/{id}/download`  -> stáhne hotový soubor (jako příloha)
 //!
 //! Stejné jádro (`converter::execute_job`) napájí CLI i API; rozdíl je jen
 //! v `JobObserver` — zde se události zapisují do append-only logu, který
@@ -16,10 +22,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -27,24 +34,37 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Notify;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::converter::{execute_job, ConvertError, JobObserver};
 use crate::models::{Job, MediaFormat, ProgressEvent};
 
-/// Append-only log událostí jedné úlohy + signalizace nových položek.
+/// Doba, po které sweeper smaže dokončenou úlohu (soubor + záznam).
+const JOB_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Append-only log událostí jedné úlohy + metadata pro download a úklid.
 struct JobLog {
     entries: Mutex<Vec<String>>,
     finished: AtomicBool,
     notify: Notify,
+    /// Pracovní adresář úlohy (maže se při úklidu).
+    dir: PathBuf,
+    /// Cesta k hotovému souboru (vyplní se z `finished` eventu).
+    output_path: Mutex<Option<PathBuf>>,
+    /// Čas dokončení (pro TTL sweeper).
+    finished_at: Mutex<Option<Instant>>,
 }
 
 impl JobLog {
-    fn new() -> Self {
+    fn new(dir: PathBuf) -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
             finished: AtomicBool::new(false),
             notify: Notify::new(),
+            dir,
+            output_path: Mutex::new(None),
+            finished_at: Mutex::new(None),
         }
     }
 
@@ -55,9 +75,30 @@ impl JobLog {
         self.notify.notify_waiters();
     }
 
+    fn set_output(&self, path: PathBuf) {
+        if let Ok(mut guard) = self.output_path.lock() {
+            *guard = Some(path);
+        }
+    }
+
+    fn output(&self) -> Option<PathBuf> {
+        self.output_path.lock().ok().and_then(|g| g.clone())
+    }
+
     fn finish(&self) {
         self.finished.store(true, Ordering::SeqCst);
+        if let Ok(mut guard) = self.finished_at.lock() {
+            *guard = Some(Instant::now());
+        }
         self.notify.notify_waiters();
+    }
+
+    fn finished_elapsed(&self) -> Option<Duration> {
+        self.finished_at
+            .lock()
+            .ok()
+            .and_then(|g| *g)
+            .map(|t| t.elapsed())
     }
 
     fn snapshot_from(&self, cursor: usize) -> (Vec<String>, bool) {
@@ -80,18 +121,26 @@ struct ApiState {
     jobs: Mutex<HashMap<Uuid, Arc<JobLog>>>,
     python_cmd: String,
     script_path: PathBuf,
+    /// Kořenový adresář pro pracovní per-job složky.
+    data_dir: PathBuf,
 }
 
 type SharedState = Arc<ApiState>;
 
-/// Observer, který zapisuje syrové JSON řádky do `JobLog`.
+/// Observer, který zapisuje syrové JSON řádky do `JobLog` a zachytí
+/// finální cestu k souboru.
 struct ChannelObserver {
     log: Arc<JobLog>,
 }
 
 impl JobObserver for ChannelObserver {
-    fn on_event(&mut self, raw: &str, _event: &ProgressEvent) {
+    fn on_event(&mut self, raw: &str, event: &ProgressEvent) {
         self.log.push(raw.to_string());
+        if let ProgressEvent::Finished { filepath } = event {
+            if !filepath.is_empty() {
+                self.log.set_output(PathBuf::from(filepath));
+            }
+        }
     }
 
     fn on_invalid(&mut self, raw: &str) {
@@ -106,14 +155,13 @@ impl JobObserver for ChannelObserver {
 struct JobRequest {
     url: String,
     format: String,
-    #[serde(default)]
-    output_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct JobResponse {
     job_id: Uuid,
     events_url: String,
+    download_url: String,
 }
 
 /// Jednoduchá chyba API s mapováním na HTTP status + JSON tělo.
@@ -138,87 +186,6 @@ async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
-/// Otevře NATIVNÍ systémový dialog pro výběr složky na stroji, kde běží server.
-///
-/// Funguje, protože jde o lokální nástroj (server == klientův stroj). Vrací:
-///   * `{ "path": "/abs/cesta" }`  když uživatel vybral složku,
-///   * `{ "cancelled": true }`     když dialog zrušil,
-///   * HTTP 500 + `{ "error": ... }` když dialog nelze otevřít (např. headless).
-async fn pick_folder() -> Response {
-    match native_pick_folder().await {
-        Ok(Some(path)) => Json(json!({ "path": path })).into_response(),
-        Ok(None) => Json(json!({ "cancelled": true })).into_response(),
-        Err(msg) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": msg })),
-        )
-            .into_response(),
-    }
-}
-
-/// Spustí platformově specifický nativní dialog pro výběr adresáře.
-async fn native_pick_folder() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        // AppleScript `choose folder` -> standardní macOS dialog (bez extra oprávnění).
-        let out = tokio::process::Command::new("osascript")
-            .args([
-                "-e",
-                "POSIX path of (choose folder with prompt \"Vyber výstupní složku\")",
-            ])
-            .output()
-            .await
-            .map_err(|e| format!("nelze spustit osascript: {e}"))?;
-
-        if out.status.success() {
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            return Ok((!path.is_empty()).then_some(path));
-        }
-        let err = String::from_utf8_lossy(&out.stderr);
-        // -128 = uživatel stiskl Zrušit.
-        if err.contains("-128") || err.to_lowercase().contains("cancel") {
-            return Ok(None);
-        }
-        return Err(err.trim().to_string());
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Zkusíme zenity (GTK), pak kdialog (KDE).
-        for (cmd, args) in [
-            ("zenity", vec!["--file-selection", "--directory", "--title=Vyber výstupní složku"]),
-            ("kdialog", vec!["--getexistingdirectory", "."]),
-        ] {
-            match tokio::process::Command::new(cmd).args(&args).output().await {
-                Ok(out) if out.status.success() => {
-                    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    return Ok((!path.is_empty()).then_some(path));
-                }
-                Ok(_) => return Ok(None), // nenulový kód = zrušeno
-                Err(_) => continue,         // nástroj chybí -> zkus další
-            }
-        }
-        return Err("nenalezen 'zenity' ani 'kdialog' (nainstaluj jeden z nich)".to_string());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let script = "Add-Type -AssemblyName System.Windows.Forms; \
-            $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
-            if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }";
-        let out = tokio::process::Command::new("powershell")
-            .args(["-NoProfile", "-STA", "-Command", script])
-            .output()
-            .await
-            .map_err(|e| format!("nelze spustit powershell: {e}"))?;
-        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        return Ok((!path.is_empty()).then_some(path));
-    }
-
-    #[allow(unreachable_code)]
-    Err("nativní výběr složky není na této platformě podporován".to_string())
-}
-
 async fn submit_job(
     State(state): State<SharedState>,
     Json(req): Json<JobRequest>,
@@ -235,15 +202,23 @@ async fn submit_job(
         ));
     }
 
-    let output_dir = PathBuf::from(req.output_dir.unwrap_or_else(|| "./downloads".to_string()));
+    let id = Uuid::new_v4();
+    // Každá úloha má vlastní izolovaný adresář pod data_dir.
+    let job_dir = state.data_dir.join(id.to_string());
+    tokio::fs::create_dir_all(&job_dir).await.map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("nelze vytvořit pracovní adresář: {e}"),
+        )
+    })?;
+
     let job = Job {
         url: req.url,
         format,
-        output_dir,
+        output_dir: job_dir.clone(),
     };
 
-    let id = Uuid::new_v4();
-    let log = Arc::new(JobLog::new());
+    let log = Arc::new(JobLog::new(job_dir));
 
     {
         let mut jobs = state
@@ -273,13 +248,11 @@ async fn submit_job(
     Ok(Json(JobResponse {
         job_id: id,
         events_url: format!("/jobs/{id}/events"),
+        download_url: format!("/jobs/{id}/download"),
     }))
 }
 
-async fn job_events(
-    State(state): State<SharedState>,
-    Path(id): Path<Uuid>,
-) -> Response {
+async fn job_events(State(state): State<SharedState>, Path(id): Path<Uuid>) -> Response {
     let log = match state.jobs.lock() {
         Ok(jobs) => jobs.get(&id).cloned(),
         Err(_) => None,
@@ -315,16 +288,121 @@ async fn job_events(
         .into_response()
 }
 
+/// Stáhne hotový soubor úlohy a streamuje ho jako přílohu.
+async fn download_job(State(state): State<SharedState>, Path(id): Path<Uuid>) -> Response {
+    let log = match state.jobs.lock() {
+        Ok(jobs) => jobs.get(&id).cloned(),
+        Err(_) => None,
+    };
+    let Some(log) = log else {
+        return ApiError(StatusCode::NOT_FOUND, format!("úloha {id} nenalezena")).into_response();
+    };
+
+    let Some(path) = log.output() else {
+        return ApiError(
+            StatusCode::CONFLICT,
+            "soubor ještě není připraven (úloha neskončila nebo selhala)".into(),
+        )
+        .into_response();
+    };
+
+    // Bezpečnost: soubor MUSÍ ležet uvnitř adresáře úlohy (anti path-traversal).
+    let canon_file = tokio::fs::canonicalize(&path).await.ok();
+    let canon_dir = tokio::fs::canonicalize(&log.dir).await.ok();
+    let inside = matches!((canon_file, canon_dir), (Some(f), Some(d)) if f.starts_with(&d));
+    if !inside {
+        return ApiError(StatusCode::NOT_FOUND, "soubor nenalezen".into()).into_response();
+    }
+
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => return ApiError(StatusCode::NOT_FOUND, "soubor nelze otevřít".into()).into_response(),
+    };
+
+    let filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download")
+        .to_string();
+    let content_type = match path.extension().and_then(|s| s.to_str()) {
+        Some("mp3") => "audio/mpeg",
+        Some("mp4") => "video/mp4",
+        Some("m4a") => "audio/mp4",
+        _ => "application/octet-stream",
+    };
+
+    let body = Body::from_stream(ReaderStream::new(file));
+    Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_DISPOSITION, content_disposition(&filename))
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Sestaví hlavičku Content-Disposition s ASCII fallbackem i UTF-8 názvem (RFC 5987).
+fn content_disposition(filename: &str) -> String {
+    let ascii: String = filename
+        .chars()
+        .map(|c| if c.is_ascii() && c != '"' && c != '\\' { c } else { '_' })
+        .collect();
+    format!(
+        "attachment; filename=\"{ascii}\"; filename*=UTF-8''{}",
+        percent_encode(filename)
+    )
+}
+
+/// Percent-encoding pro RFC 5987 (bez externí závislosti).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
+}
+
 /// Sestaví router se sdíleným stavem.
 fn build_router(state: SharedState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/health", get(health))
-        .route("/pick-folder", get(pick_folder))
         .route("/jobs", post(submit_job))
         .route("/jobs/{id}/events", get(job_events))
+        .route("/jobs/{id}/download", get(download_job))
         .with_state(state)
 }
+
+/// Periodicky maže dokončené úlohy starší než `JOB_TTL` (soubory i záznamy).
+fn spawn_cleanup(state: SharedState) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+
+            let mut expired: Vec<(Uuid, PathBuf)> = Vec::new();
+            if let Ok(jobs) = state.jobs.lock() {
+                for (id, log) in jobs.iter() {
+                    if matches!(log.finished_elapsed(), Some(elapsed) if elapsed >= JOB_TTL) {
+                        expired.push((*id, log.dir.clone()));
+                    }
+                }
+            }
+
+            for (id, dir) in expired {
+                if let Ok(mut jobs) = state.jobs.lock() {
+                    jobs.remove(&id);
+                }
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            }
+        }
+    });
+}
+
+// ---- Spuštění serveru + dev-friendly bind ----
 
 /// Najde PID(y) procesů naslouchajících na daném TCP portu (přes `lsof`).
 async fn find_port_holders(port: u16) -> Vec<u32> {
@@ -385,9 +463,7 @@ async fn bind_listener(
     }
 
     if force && !ours.is_empty() {
-        eprintln!(
-            "⚠ Port {port} drží starý ytmp server (PID {ours:?}) — ukončuji (--force)…"
-        );
+        eprintln!("⚠ Port {port} drží starý ytmp server (PID {ours:?}) — ukončuji (--force)…");
         for pid in &ours {
             kill_pid(*pid).await;
         }
@@ -420,25 +496,33 @@ pub async fn serve(
     addr: SocketAddr,
     python_cmd: String,
     script_path: PathBuf,
+    data_dir: PathBuf,
     force: bool,
 ) -> Result<(), ConvertError> {
     if !script_path.exists() {
         return Err(ConvertError::ScriptNotFound(script_path));
     }
 
+    tokio::fs::create_dir_all(&data_dir)
+        .await
+        .map_err(ConvertError::Io)?;
+
     let state = Arc::new(ApiState {
         jobs: Mutex::new(HashMap::new()),
         python_cmd,
         script_path,
+        data_dir,
     });
 
+    spawn_cleanup(Arc::clone(&state));
     let app = build_router(state);
 
     let listener = bind_listener(addr, force).await?;
 
     println!("▶ Web UI:  http://{addr}/");
     println!("  POST http://{addr}/jobs   body: {{\"url\":\"...\",\"format\":\"mp3\"}}");
-    println!("  GET  http://{addr}/jobs/<id>/events  (SSE)");
+    println!("  GET  http://{addr}/jobs/<id>/events    (SSE)");
+    println!("  GET  http://{addr}/jobs/<id>/download  (soubor)");
 
     axum::serve(listener, app).await.map_err(ConvertError::Io)?;
     Ok(())
