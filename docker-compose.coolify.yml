@@ -1,0 +1,52 @@
+# ============================================================================
+# COOLIFY (a jiná prostředí s vlastní reverzní proxy)
+#
+# Spustí POUZE kontejner ytmp z registry. HTTPS, doménu a routování
+# řeší Coolify (jeho Traefik/Caddy) — proto zde ŽÁDNÝ vlastní Caddy ani
+# publikované porty 80/443 (jinak konflikt s Coolify proxy).
+#
+# V Coolify:
+#   1) New Resource -> Docker Compose -> vlož tento soubor
+#      (nebo Docker Image -> git.slks.cz/ondrej/yt-mp:latest)
+#   2) přiřaď doménu (např. ytmp.slks.cz) a cílový port 8080
+#   3) limity/cookies nastav přes Environment Variables (viz níže)
+#
+# Image je arm64 (sedí na Oracle Ampere). Coolify ho stáhne z registry.
+# ============================================================================
+
+services:
+  ytmp:
+    image: git.slks.cz/ondrej/yt-mp:${YTMP_TAG:-0.3.1}
+    # Coolify routuje doménu -> tento port (TLS řeší Coolify proxy).
+    expose:
+      - "8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+    command:
+      - ytmp
+      - serve
+      - --host=0.0.0.0
+      - --port=8080
+      - --python=python3
+      - --data-dir=/app/data
+      - --max-concurrent=${YTMP_MAX_CONCURRENT:-3}
+      - --max-queue=${YTMP_MAX_QUEUE:-20}
+      - --rate-limit=${YTMP_RATE_LIMIT:-10}
+      - --max-duration=${YTMP_MAX_DURATION:-10800}
+      # cookies: nahraj soubor a nastav YTMP_COOKIES=/app/cookies.txt + namountuj přes volume
+      # - --cookies=${YTMP_COOKIES:-/app/cookies.txt}
+    volumes:
+      # Dočasné per-job soubory (named volume spravovaný Coolify).
+      - ytmp_data:/app/data
+      # Volitelně cookies:
+      # - ./cookies.txt:/app/cookies.txt:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ytmp_data:

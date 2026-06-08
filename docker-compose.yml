@@ -1,3 +1,17 @@
+# ============================================================================
+# SAMOSTATNÝ SERVER (dedikovaný VPS, kde před aplikací nic nestojí)
+#
+# Obsahuje vlastní Caddy reverzní proxy s automatickým HTTPS.
+# Build proběhne lokálně -> funguje na libovolné architektuře serveru.
+#
+#   docker compose up -d --build
+#   # s reálnou doménou:
+#   DOMAIN=ytmp.example.com ACME_EMAIL=ty@example.com docker compose up -d --build
+#
+# Pro Coolify / prostředí s vlastní proxy použij místo tohoto:
+#   docker compose -f docker-compose.coolify.yml up -d
+# ============================================================================
+
 services:
   ytmp:
     build:

@@ -169,17 +169,20 @@ python3 python_core/downloader.py "URL" --format mp3 --output ./downloads
 
 ## Produkční nasazení (HTTPS + limity)
 
-`docker compose` obsahuje i **Caddy** reverzní proxy s automatickým HTTPS
-(Let's Encrypt). Aplikace samotná naslouchá jen interně, ven jde přes Caddy.
+Dvě varianty podle toho, co je před aplikací (detaily v [`DEPLOY.md`](DEPLOY.md)):
+
+| Scénář | Soubor | Proxy / HTTPS |
+|--------|--------|---------------|
+| **Coolify** (vedle Gitea) | `docker-compose.coolify.yml` | řeší Coolify |
+| **Samostatný VPS** | `docker-compose.yml` | vlastní Caddy (auto-HTTPS) |
 
 ```bash
-# Produkce s reálnou doménou:
-DOMAIN=ytmp.example.com ACME_EMAIL=ty@example.com docker compose up -d --build
-# -> https://ytmp.example.com/  (cert se vyřídí automaticky)
+# A) Coolify: jen kontejner ytmp z registry, doménu/TLS řeší Coolify
+docker compose -f docker-compose.coolify.yml up -d
 
-# Lokální test bez domény (self-signed cert pro localhost):
-docker compose up -d --build
-# -> https://localhost/
+# B) Samostatný server: ytmp + Caddy s automatickým HTTPS
+DOMAIN=ytmp.example.com ACME_EMAIL=ty@example.com docker compose up -d --build
+# lokální test bez domény (self-signed): docker compose up -d --build  -> https://localhost/
 ```
 
 ### Bezpečnostní a provozní opatření
