@@ -55,7 +55,18 @@ cd rust_backend
 cargo build --release
 ```
 
-## Spuštění přes Docker
+## Hotový image z registry (CI)
+
+Při každém tagu `vX.Y.Z` sestaví **Gitea Actions** (`.gitea/workflows/docker.yml`)
+image a pushne ho do registry. Lze ho rovnou stáhnout:
+
+```bash
+docker login git.slks.cz
+docker pull git.slks.cz/ondrej/yt-mp:latest      # nebo konkrétní verze, např. :0.3.1
+docker run -p 8080:8080 git.slks.cz/ondrej/yt-mp:latest
+```
+
+## Spuštění přes Docker (lokální build)
 
 Nejjednodušší cesta — vše (Rust binárka, Python + yt-dlp, ffmpeg) je v jednom
 obrazu, není potřeba nic instalovat lokálně:
