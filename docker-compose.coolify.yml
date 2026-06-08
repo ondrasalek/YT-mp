@@ -16,7 +16,7 @@
 
 services:
   ytmp:
-    image: git.slks.cz/ondrej/yt-mp:${YTMP_TAG:-0.3.1}
+    image: git.slks.cz/ondrej/yt-mp:${YTMP_TAG:-latest}
     # Coolify routuje doménu -> tento port (TLS řeší Coolify proxy).
     expose:
       - "8080"
