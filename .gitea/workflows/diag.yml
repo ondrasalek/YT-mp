@@ -2,7 +2,7 @@ name: diag
 on:
   workflow_dispatch:
 jobs:
-  shell-only:
+  docker-check:
     runs-on: ubuntu-22.04
     steps:
-      - run: echo "shell-ok" && uname -a
+      - run: docker version && docker info | grep -i 'server version' && echo "DOCKER-OK"
