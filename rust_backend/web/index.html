@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube → MP3/MP4 konvertor</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --panel: #1a1d27;
+      --border: #2a2e3a;
+      --accent: #4f8cff;
+      --ok: #34d399;
+      --err: #f87171;
+      --muted: #8b90a0;
+      --text: #e7e9ee;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+    .wrap { width: 100%; max-width: 720px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+    form {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+    label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 6px; }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      background: #11141c;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 14px;
+    }
+    .row { display: flex; gap: 14px; }
+    .row > div { flex: 1; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pick { display: flex; gap: 8px; }
+    .pick input { flex: 1; }
+    button.ghost {
+      background: #11141c;
+      border: 1px solid var(--border);
+      padding: 0 14px;
+      font-size: 16px;
+      flex: 0 0 auto;
+    }
+    button.ghost:hover { border-color: var(--accent); }
+    .jobs { margin-top: 24px; display: grid; gap: 14px; }
+    .job {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .job .title { font-size: 14px; font-weight: 600; word-break: break-all; }
+    .job .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .bar-track {
+      height: 10px;
+      background: #11141c;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 12px 0 8px;
+    }
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.25s ease;
+    }
+    .job.done .bar-fill { background: var(--ok); }
+    .job.error .bar-fill { background: var(--err); }
+    .status { font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+    .status .state { font-weight: 600; }
+    .status.ok .state { color: var(--ok); }
+    .status.err .state { color: var(--err); }
+    .log {
+      margin-top: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: var(--muted);
+      max-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>YouTube → MP3/MP4 konvertor</h1>
+    <p class="sub">Rust jádro · Python <code>yt-dlp</code> worker · živý progress přes SSE</p>
+
+    <form id="form">
+      <div>
+        <label for="url">YouTube URL (video nebo playlist)</label>
+        <input id="url" type="url" placeholder="https://youtu.be/..." required />
+      </div>
+      <div class="row">
+        <div>
+          <label for="format">Formát</label>
+          <select id="format">
+            <option value="mp3">MP3 (audio 320k)</option>
+            <option value="mp4" selected>MP4 (video)</option>
+          </select>
+        </div>
+        <div>
+          <label for="output">Výstupní adresář</label>
+          <div class="pick">
+            <input id="output" type="text" value="./downloads" />
+            <button id="pick" type="button" class="ghost" title="Otevřít systémový dialog">📁</button>
+          </div>
+        </div>
+      </div>
+      <button id="submit" type="submit">Stáhnout</button>
+    </form>
+
+    <div id="jobs" class="jobs"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById("form");
+    const jobsEl = document.getElementById("jobs");
+
+    const STATE_LABELS = {
+      starting: "Spouštím…",
+      metadata: "Metadata",
+      downloading: "Stahuji",
+      processing: "Zpracování",
+      finished: "Hotovo",
+      error: "Chyba",
+      warning: "Varování",
+    };
+
+    function createJobCard(url, format) {
+      const card = document.createElement("div");
+      card.className = "job";
+      card.innerHTML = `
+        <div class="title"></div>
+        <div class="meta">${format.toUpperCase()} · ${url}</div>
+        <div class="bar-track"><div class="bar-fill"></div></div>
+        <div class="status"><span class="state">…</span><span class="detail"></span></div>
+        <div class="log"></div>`;
+      card.querySelector(".title").textContent = url;
+      jobsEl.prepend(card);
+      return {
+        card,
+        title: card.querySelector(".title"),
+        fill: card.querySelector(".bar-fill"),
+        status: card.querySelector(".status"),
+        state: card.querySelector(".state"),
+        detail: card.querySelector(".detail"),
+        log: card.querySelector(".log"),
+      };
+    }
+
+    function appendLog(ui, obj) {
+      ui.log.textContent += JSON.stringify(obj) + "\n";
+      ui.log.scrollTop = ui.log.scrollHeight;
+    }
+
+    function applyEvent(ui, ev) {
+      ui.state.textContent = STATE_LABELS[ev.status] || ev.status;
+      switch (ev.status) {
+        case "metadata":
+          if (ev.title) ui.title.textContent = ev.title;
+          break;
+        case "downloading":
+          ui.fill.style.width = (ev.progress || 0) + "%";
+          ui.detail.textContent = `${ev.progress?.toFixed(1) ?? 0}% · ${ev.speed || ""} · ETA ${ev.eta || ""}`;
+          break;
+        case "processing":
+          ui.detail.textContent = ev.postprocessor || "";
+          break;
+        case "finished":
+          ui.fill.style.width = "100%";
+          ui.card.classList.add("done");
+          ui.status.classList.add("ok");
+          ui.detail.textContent = ev.filepath || "";
+          break;
+        case "error":
+          ui.card.classList.add("error");
+          ui.status.classList.add("err");
+          ui.detail.textContent = ev.error || "";
+          break;
+      }
+    }
+
+    async function submitJob(url, format, output) {
+      const ui = createJobCard(url, format);
+      ui.state.textContent = "Zařazuji…";
+
+      let data;
+      try {
+        const resp = await fetch("/jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, format, output_dir: output }),
+        });
+        data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || "POST /jobs selhalo");
+      } catch (e) {
+        ui.card.classList.add("error");
+        ui.status.classList.add("err");
+        ui.state.textContent = "Chyba";
+        ui.detail.textContent = e.message;
+        return;
+      }
+
+      const source = new EventSource(data.events_url);
+      source.onmessage = (msg) => {
+        let ev;
+        try { ev = JSON.parse(msg.data); } catch { return; }
+        appendLog(ui, ev);
+        applyEvent(ui, ev);
+        if (ev.status === "finished" || ev.status === "error") {
+          source.close();
+        }
+      };
+      source.onerror = () => {
+        // Stream skončil (server zavřel po dokončení) — pokud ještě běžel, označ chybu.
+        if (!ui.card.classList.contains("done") && !ui.card.classList.contains("error")) {
+          ui.detail.textContent += " (spojení uzavřeno)";
+        }
+        source.close();
+      };
+    }
+
+    const pickBtn = document.getElementById("pick");
+    pickBtn.addEventListener("click", async () => {
+      const original = pickBtn.textContent;
+      pickBtn.disabled = true;
+      pickBtn.textContent = "…";
+      try {
+        const resp = await fetch("/pick-folder");
+        const data = await resp.json();
+        if (data.path) {
+          document.getElementById("output").value = data.path;
+        } else if (data.error) {
+          alert("Výběr složky selhal: " + data.error);
+        }
+        // data.cancelled -> uživatel zrušil, neděláme nic
+      } catch (e) {
+        alert("Výběr složky selhal: " + e.message);
+      } finally {
+        pickBtn.disabled = false;
+        pickBtn.textContent = original;
+      }
+    });
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const url = document.getElementById("url").value.trim();
+      const format = document.getElementById("format").value;
+      const output = document.getElementById("output").value.trim() || "./downloads";
+      if (url) submitJob(url, format, output);
+    });
+  </script>
+</body>
+</html>

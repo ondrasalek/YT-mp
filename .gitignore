@@ -1,0 +1,10 @@
+# Rust
+/rust_backend/target/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Výstupy stahování
+/downloads/

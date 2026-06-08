@@ -1,0 +1,9 @@
+# Python závislosti pro media worker (python_core).
+# Instalace:  pip install -r requirements.txt
+#
+# Systémová závislost (NENÍ pip balíček): ffmpeg musí být v PATH.
+#   macOS:  brew install ffmpeg
+#   Debian: sudo apt install ffmpeg
+
+# Stahování YouTube médií a orchestrace ffmpeg postprocessingu.
+yt-dlp>=2024.0.0

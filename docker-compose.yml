@@ -1,0 +1,21 @@
+services:
+  ytmp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ytmp:0.1.0
+    container_name: ytmp
+    ports:
+      - "8080:8080"
+    volumes:
+      # Stažené soubory se ukládají na hostitele (výchozí výstup je ./downloads).
+      - ./downloads:/app/downloads
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
