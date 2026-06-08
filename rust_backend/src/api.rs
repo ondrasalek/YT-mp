@@ -48,6 +48,9 @@ const JOB_TTL: Duration = Duration::from_secs(30 * 60);
 /// Maximální velikost těla requestu (URL jsou malé; bráníme se zneúměrnému vstupu).
 const MAX_BODY_BYTES: usize = 16 * 1024;
 
+/// Maximální velikost nahrávaného cookies souboru (běžně pár KB, dáváme rezervu).
+const MAX_COOKIES_BYTES: usize = 512 * 1024;
+
 /// Konfigurace serveru předaná z CLI.
 pub struct ServeConfig {
     pub addr: SocketAddr,
@@ -65,6 +68,8 @@ pub struct ServeConfig {
     pub max_duration: Option<u64>,
     /// Cookies soubor pro yt-dlp.
     pub cookies: Option<PathBuf>,
+    /// Sdílený token pro admin endpoint /admin/cookies. None = vypnuto.
+    pub admin_token: Option<String>,
 }
 
 /// Per-IP rate limiter (klouzavé okno).
@@ -204,8 +209,13 @@ struct ApiState {
     rate: RateLimiter,
     /// Max. délka videa v sekundách (None = bez limitu).
     max_duration: Option<u64>,
-    /// Cookies soubor pro yt-dlp.
+    /// Nakonfigurovaná cesta k cookies souboru pro yt-dlp (nemusí ještě
+    /// existovat — admin endpoint ho může nahrát za běhu). Existence se
+    /// ověřuje až při zařazení úlohy (`submit_job`), takže nahrání cookies
+    /// "naživo" funguje bez restartu serveru.
     cookies: Option<PathBuf>,
+    /// Sdílený token pro admin endpoint /admin/cookies. None = endpoint vypnutý.
+    admin_token: Option<String>,
 }
 
 type SharedState = Arc<ApiState>;
@@ -360,7 +370,10 @@ async fn submit_job(
         format,
         output_dir: job_dir.clone(),
         max_duration: state.max_duration,
-        cookies: state.cookies.clone(),
+        // Existenci ověřujeme až tady (ne jednou při startu) — díky tomu
+        // se nově nahrané cookies (přes /admin/cookies) projeví okamžitě,
+        // bez restartu serveru. Chybějící soubor = tichý fallback bez cookies.
+        cookies: state.cookies.clone().filter(|c| c.exists()),
     };
 
     let log = Arc::new(JobLog::new(job_dir));
@@ -402,6 +415,90 @@ async fn submit_job(
         events_url: format!("/jobs/{id}/events"),
         download_url: format!("/jobs/{id}/download"),
     }))
+}
+
+/// Nahraje/aktualizuje cookies.txt pro yt-dlp za běhu (bez SSH/redeploy).
+///
+/// Chráněno sdíleným tajemstvím (`--admin-token` / `YTMP_ADMIN_TOKEN`),
+/// posílaným jako `Authorization: Bearer <token>`. Pokud token není
+/// nakonfigurovaný nebo cesta `--cookies` není zadaná, endpoint vrací 404
+/// (nezveřejňuje, jestli je "jen špatný token" vs. "vypnuto").
+///
+/// Příklad nahrání/refreshe:
+///   curl -X POST https://tva-domena/admin/cookies \
+///        -H "Authorization: Bearer $YTMP_ADMIN_TOKEN" \
+///        --data-binary @cookies.txt
+async fn upload_cookies(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (Some(token), Some(path)) = (&state.admin_token, &state.cookies) else {
+        return Err(ApiError(StatusCode::NOT_FOUND, "endpoint není dostupný".into()));
+    };
+
+    let provided = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if provided != Some(token.as_str()) {
+        // Stejná odpověď jako "neexistuje" — nepomáháme útočníkovi rozlišit stavy.
+        return Err(ApiError(StatusCode::NOT_FOUND, "endpoint není dostupný".into()));
+    }
+
+    let text = String::from_utf8(body.to_vec())
+        .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "obsah musí být validní UTF-8 text".into()))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "prázdný obsah".into()));
+    }
+    // Velmi hrubá validace Netscape cookie formátu (řádky se 7 sloupci
+    // oddělenými tabulátory). Chrání hlavně před omylem (např. nahráním
+    // něčeho úplně jiného), ne před záměrným zneužitím.
+    let looks_like_netscape = trimmed
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+        .any(|l| l.split('\t').count() >= 6);
+    if !looks_like_netscape {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "obsah nevypadá jako cookies.txt v Netscape formátu (sloupce oddělené tabulátory)".into(),
+        ));
+    }
+
+    write_file_atomically(path, text.as_bytes())
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("zápis souboru selhal: {e}")))?;
+
+    Ok(Json(json!({ "status": "ok", "path": path.display().to_string(), "bytes": text.len() })))
+}
+
+/// Atomicky zapíše obsah na cílovou cestu: zapíše do dočasného souboru ve
+/// stejném adresáři (-> stejný filesystém, rename je atomický), nastaví
+/// restriktivní oprávnění a teprve pak ho přejmenuje na finální cestu.
+/// Díky tomu čtenář (yt-dlp) nikdy neuvidí částečně zapsaný soubor a Docker
+/// bind-mount cílí na existující REGULÁRNÍ soubor (nevytvoří adresář).
+async fn write_file_atomically(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    let tmp_path = dir.join(format!(".{}.upload-{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("cookies"),
+        Uuid::new_v4()));
+
+    tokio::fs::write(&tmp_path, content).await?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600)).await;
+    }
+
+    match tokio::fs::rename(&tmp_path, path).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            Err(err)
+        }
+    }
 }
 
 async fn job_events(State(state): State<SharedState>, Path(id): Path<Uuid>) -> Response {
@@ -528,16 +625,29 @@ async fn security_headers(req: Request, next: Next) -> Response {
 }
 
 /// Sestaví router se sdíleným stavem.
+///
+/// Admin trasa (`/admin/cookies`) má vlastní, větší limit těla requestu —
+/// proto je v samostatném sub-routeru se svým `DefaultBodyLimit` vrstvou
+/// (limity z `.layer()` se aplikují jen na trasy zaregistrované předtím
+/// ve stejném routeru, takže se vzájemně neovlivní).
 fn build_router(state: SharedState) -> Router {
-    Router::new()
+    let main_routes = Router::new()
         .route("/", get(index))
         .route("/health", get(health))
         .route("/jobs", post(submit_job))
         .route("/jobs/{id}/events", get(job_events))
         .route("/jobs/{id}/download", get(download_job))
-        .layer(middleware::from_fn(security_headers))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .with_state(state)
+        .with_state(state.clone());
+
+    let admin_routes = Router::new()
+        .route("/admin/cookies", post(upload_cookies))
+        .layer(DefaultBodyLimit::max(MAX_COOKIES_BYTES))
+        .with_state(state);
+
+    main_routes
+        .merge(admin_routes)
+        .layer(middleware::from_fn(security_headers))
 }
 
 /// Periodicky maže dokončené úlohy starší než `JOB_TTL` (soubory i záznamy).
@@ -664,10 +774,21 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), ConvertError> {
         return Err(ConvertError::ScriptNotFound(cfg.script_path));
     }
 
-    // Cookies soubor (pokud zadán) musí existovat.
+    // Cookies soubor (pokud zadán) zatím nemusí existovat — admin endpoint
+    // ho může nahrát za běhu (viz /admin/cookies). Existence se ověřuje
+    // dynamicky při každém zařazení úlohy.
     if let Some(cookies) = &cfg.cookies {
         if !cookies.exists() {
-            eprintln!("⚠ Cookies soubor '{}' neexistuje — pokračuji bez něj.", cookies.display());
+            let hint = if cfg.admin_token.is_some() {
+                " (lze nahrát přes POST /admin/cookies s Bearer tokenem)"
+            } else {
+                ""
+            };
+            eprintln!(
+                "⚠ Cookies soubor '{}' zatím neexistuje — úlohy poběží bez cookies{}.",
+                cookies.display(),
+                hint
+            );
         }
     }
 
@@ -688,7 +809,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), ConvertError> {
         capacity,
         rate: RateLimiter::new(cfg.rate_per_min, Duration::from_secs(60)),
         max_duration: cfg.max_duration,
-        cookies: cfg.cookies.filter(|c| c.exists()),
+        cookies: cfg.cookies,
+        admin_token: cfg.admin_token,
     });
 
     spawn_cleanup(Arc::clone(&state));

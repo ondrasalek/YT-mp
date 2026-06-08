@@ -104,6 +104,13 @@ struct ServeArgs {
     #[arg(long)]
     cookies: Option<PathBuf>,
 
+    /// Sdílený token pro admin endpoint /admin/cookies (nahrání/refresh
+    /// cookies přes HTTP bez SSH). Bez tohoto tokenu je endpoint vypnutý.
+    /// Lze nastavit i přes proměnnou prostředí YTMP_ADMIN_TOKEN (nezůstane
+    /// vidět v `ps`/`docker inspect` jako argument příkazu).
+    #[arg(long, env = "YTMP_ADMIN_TOKEN")]
+    admin_token: Option<String>,
+
     /// Cesta k Python interpretu (jinak se zkusí python3, pak python).
     #[arg(long)]
     python: Option<String>,
@@ -192,6 +199,7 @@ async fn run_serve(args: ServeArgs) -> ExitCode {
         rate_per_min: args.rate_limit,
         max_duration: (args.max_duration > 0).then_some(args.max_duration),
         cookies: args.cookies,
+        admin_token: args.admin_token,
     };
     match api::serve(cfg).await {
         Ok(()) => ExitCode::SUCCESS,

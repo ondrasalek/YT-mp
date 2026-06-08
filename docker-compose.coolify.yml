@@ -22,6 +22,10 @@ services:
       - "8080"
     environment:
       - PYTHONUNBUFFERED=1
+      # Token pro POST /admin/cookies (nahrání/refresh cookies přes HTTP,
+      # bez SSH a bez redeploy). Prázdné/nevyplněné = endpoint je vypnutý.
+      # Vygeneruj náhodný řetězec, např.: openssl rand -hex 32
+      - YTMP_ADMIN_TOKEN=${YTMP_ADMIN_TOKEN:-}
     command:
       - ytmp
       - serve
@@ -33,13 +37,18 @@ services:
       - --max-queue=${YTMP_MAX_QUEUE:-20}
       - --rate-limit=${YTMP_RATE_LIMIT:-10}
       - --max-duration=${YTMP_MAX_DURATION:-10800}
-      # cookies: nahraj soubor a nastav YTMP_COOKIES=/app/cookies.txt + namountuj přes volume
-      # - --cookies=${YTMP_COOKIES:-/app/cookies.txt}
+      # Cesta k cookies souboru — NEMUSÍ při startu existovat. Lze ho
+      # kdykoliv nahrát/aktualizovat za běhu (bez redeploy):
+      #   curl -X POST https://tva-domena/admin/cookies \
+      #        -H "Authorization: Bearer $YTMP_ADMIN_TOKEN" \
+      #        --data-binary @cookies.txt
+      # (vyžaduje YTMP_ADMIN_TOKEN výše; soubor se ukládá do named volume
+      # ytmp_data, takže přežije redeploy i restart)
+      - --cookies=/app/data/cookies.txt
     volumes:
-      # Dočasné per-job soubory (named volume spravovaný Coolify).
+      # Dočasné per-job soubory + cookies.txt (named volume spravovaný
+      # Coolify — cookies nahrávej/aktualizuj přes /admin/cookies výše).
       - ytmp_data:/app/data
-      # Volitelně cookies:
-      # - ./cookies.txt:/app/cookies.txt:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else sys.exit(1)"]

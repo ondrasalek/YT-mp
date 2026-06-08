@@ -17,18 +17,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ytmp:0.3.3
+    image: ytmp:0.3.4
     container_name: ytmp
     # Port se nepublikuje na hostitele — přístup jde přes Caddy (TLS).
     expose:
       - "8080"
     volumes:
-      # Dočasné per-job soubory (volitelné — mažou se po TTL i bez volume).
+      # Dočasné per-job soubory + cookies.txt (přežijí restart/redeploy).
       - ./data:/app/data
-      # Volitelně cookies pro obejití YouTube bot-checku (odkomentuj + dodej soubor):
-      # - ./cookies.txt:/app/cookies.txt:ro
     environment:
       - PYTHONUNBUFFERED=1
+      # Token pro POST /admin/cookies (nahrání/refresh cookies přes HTTP,
+      # bez SSH a bez restartu kontejneru). Prázdné = endpoint je vypnutý.
+      # Vygeneruj náhodný řetězec, např.: openssl rand -hex 32
+      - YTMP_ADMIN_TOKEN=${YTMP_ADMIN_TOKEN:-}
     # Produkční limity — uprav dle výkonu serveru.
     command:
       - ytmp
@@ -41,7 +43,12 @@ services:
       - --max-queue=20
       - --rate-limit=10
       - --max-duration=10800   # 3 h; 0 = bez limitu
-      # - --cookies=/app/cookies.txt
+      # Cesta k cookies — nemusí při startu existovat, lze ji kdykoliv
+      # nahrát/aktualizovat za běhu (viz YTMP_ADMIN_TOKEN výše):
+      #   curl -X POST https://tva-domena/admin/cookies \
+      #        -H "Authorization: Bearer $YTMP_ADMIN_TOKEN" \
+      #        --data-binary @cookies.txt
+      - --cookies=/app/data/cookies.txt
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else sys.exit(1)"]

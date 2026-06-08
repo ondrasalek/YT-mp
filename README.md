@@ -203,12 +203,46 @@ Vše je zapnuté ve výchozím stavu (laditelné přes `serve` přepínače / co
 ### YouTube bot-check (cookies)
 
 Z datacenter/VPS IP YouTube občas vyžaduje přihlášení („Sign in to confirm
-you're not a bot"). Předej exportovaný cookies soubor:
+you're not a bot"). Řešení: předat exportovaný `cookies.txt` (Netscape formát)
+přes `--cookies`:
 
 ```bash
 ./target/release/ytmp serve --cookies ./cookies.txt   # CLI
-# nebo v docker-compose.yml odkomentuj volume + --cookies
+# nebo v docker-compose.yml/docker-compose.coolify.yml nastav --cookies=...
 ```
+
+**Nahrání/refresh cookies za běhu (bez SSH, bez restartu):**
+
+Soubor cookies typicky po čase vyprší a je potřeba ho obnovit. Místo
+kopírování přes SSH/Coolify file mount lze nastavit `--admin-token`
+(nebo proměnnou prostředí `YTMP_ADMIN_TOKEN`) a nahrávat/aktualizovat
+`cookies.txt` přímo přes HTTP endpoint `POST /admin/cookies`:
+
+```bash
+# 1) Vygeneruj náhodný token a nastav ho na serveru:
+openssl rand -hex 32
+#   ./target/release/ytmp serve --cookies ./data/cookies.txt --admin-token <TOKEN>
+#   (nebo env YTMP_ADMIN_TOKEN=<TOKEN>; v Coolify jako proměnná prostředí)
+
+# 2) Nahraj/aktualizuj cookies (přepíše stávající soubor atomicky):
+curl -X POST https://tva-domena/admin/cookies \
+     -H "Authorization: Bearer <TOKEN>" \
+     --data-binary @cookies.txt
+```
+
+Poznámky:
+- Endpoint je vypnutý (vrací `404`), pokud `--admin-token`/`YTMP_ADMIN_TOKEN`
+  není nastaven, nebo pokud token v `Authorization: Bearer ...` nesedí —
+  útočník tak nepozná, jestli endpoint vůbec existuje.
+- Validuje se Netscape formát a velikost (limit 512 KB); zápis je atomický
+  (přes dočasný soubor + `rename`) a soubor dostane oprávnění `0600`.
+- Cesta zadaná v `--cookies` nemusí při startu existovat — server ji
+  zkontroluje při každé úloze, takže nahrání nového souboru funguje
+  okamžitě, bez restartu/redeploye.
+- **Nikdy nevkládej obsah `cookies.txt` (živé session cookies) do chatu,
+  issue, PR ani jiného sdíleného místa** — kdokoliv s nimi může převzít
+  tvůj Google účet. Pokud k tomu omylem dojde, okamžitě v Google účtu
+  odhlas všechna zařízení / změň heslo a vyexportuj cookies znovu.
 
 ## Návratové kódy
 
