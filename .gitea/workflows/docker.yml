@@ -2,6 +2,9 @@ name: Build & push Docker image
 
 # Sestaví Docker image a pushne ho do Gitea container registry na git.slks.cz.
 # Spouští se při tagu verze (vX.Y.Z) nebo ručně (workflow_dispatch).
+#
+# Používá čisté `docker` CLI (žádné buildx/marketplace akce) kvůli maximální
+# kompatibilitě se self-hosted runnerem.
 
 on:
   push:
@@ -13,6 +16,10 @@ permissions:
   contents: read
   packages: write
 
+env:
+  REGISTRY: git.slks.cz
+  IMAGE_NAME: yt-mp
+
 jobs:
   docker:
     runs-on: ubuntu-latest
@@ -20,33 +27,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Diagnostika prostředí
+        run: |
+          echo "ref=${{ github.ref }} (type=${{ github.ref_type }}, name=${{ github.ref_name }})"
+          docker version
+          docker info | grep -iE 'server version|storage driver' || true
 
-      - name: Log in to Gitea container registry
-        uses: docker/login-action@v3
-        with:
-          registry: git.slks.cz
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Odvození tagů
+        id: vars
+        run: |
+          IMAGE="${REGISTRY}/${{ github.repository_owner }}/${IMAGE_NAME}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="manual-$(echo '${{ github.sha }}' | cut -c1-7)"
+          fi
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Bude se stavět: ${IMAGE}:${VERSION} a ${IMAGE}:latest"
 
-      - name: Docker metadata (tags & labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: git.slks.cz/${{ github.repository_owner }}/yt-mp
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=tag
-            type=raw,value=latest
+      - name: Přihlášení do registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Build image
+        run: |
+          docker build \
+            -t "${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version }}" \
+            -t "${{ steps.vars.outputs.image }}:latest" \
+            .
+
+      - name: Push image
+        run: |
+          docker push "${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.version }}"
+          docker push "${{ steps.vars.outputs.image }}:latest"
