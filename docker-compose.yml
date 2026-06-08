@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ytmp:0.3.2
+    image: ytmp:0.3.3
     container_name: ytmp
     # Port se nepublikuje na hostitele — přístup jde přes Caddy (TLS).
     expose:

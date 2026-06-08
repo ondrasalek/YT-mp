@@ -1,6 +1,6 @@
 [package]
 name = "ytmp"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "YouTube -> MP3/MP4 konvertor: Rust orchestrační jádro nad Python yt-dlp workerem."
 license = "MIT"

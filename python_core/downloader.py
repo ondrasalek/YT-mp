@@ -151,6 +151,12 @@ def build_options(
     if cookies:
         # Cookies soubor pomáhá obejít "Sign in to confirm you're not a bot".
         common["cookiefile"] = cookies
+    else:
+        # Bez cookies zkusíme klienty, které YouTube bot-check obvykle
+        # neřeší (na rozdíl od výchozího "web" klienta z datacenter IP).
+        # POZN.: YouTube tohle chování průběžně mění — pokud přestane
+        # fungovat, je potřeba doplnit --cookies.
+        common["extractor_args"] = {"youtube": {"player_client": ["android", "web"]}}
 
     if media_format == "mp3":
         common.update(
