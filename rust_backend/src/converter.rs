@@ -146,13 +146,21 @@ async fn run_inner<O: JobObserver>(
     observer: &mut O,
 ) -> Result<(), ConvertError> {
     // POZOR: argumenty se předávají jako pole -> žádný shell, žádná injection.
-    let mut child = Command::new(python_cmd)
+    let mut command = Command::new(python_cmd);
+    command
         .arg(script_path)
         .arg(&job.url)
         .arg("--format")
         .arg(job.format.as_arg())
         .arg("--output")
-        .arg(&job.output_dir)
+        .arg(&job.output_dir);
+    if let Some(secs) = job.max_duration {
+        command.arg("--max-duration").arg(secs.to_string());
+    }
+    if let Some(cookies) = &job.cookies {
+        command.arg("--cookies").arg(cookies);
+    }
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())

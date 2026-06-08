@@ -128,6 +128,7 @@ def postprocessor_hook(d: dict[str, Any]) -> None:
 def build_options(
     media_format: str,
     output_dir: Path,
+    cookies: str | None = None,
 ) -> dict[str, Any]:
     """Sestaví konfiguraci yt-dlp podle požadovaného formátu.
 
@@ -146,6 +147,10 @@ def build_options(
         "postprocessor_hooks": [postprocessor_hook],
         "ignoreerrors": False,
     }
+
+    if cookies:
+        # Cookies soubor pomáhá obejít "Sign in to confirm you're not a bot".
+        common["cookiefile"] = cookies
 
     if media_format == "mp3":
         common.update(
@@ -233,6 +238,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help="Adresář pro uložení výstupu.",
     )
+    parser.add_argument(
+        "--max-duration",
+        type=int,
+        default=0,
+        help="Maximální délka videa v sekundách (0 = bez limitu).",
+    )
+    parser.add_argument(
+        "--cookies",
+        default=None,
+        help="Cesta k cookies souboru pro yt-dlp (obejití bot-checku).",
+    )
     return parser.parse_args(argv)
 
 
@@ -253,7 +269,7 @@ def run(args: argparse.Namespace) -> int:
 
     emit({"status": "starting", "url": args.url})
 
-    options = build_options(args.format, output_dir)
+    options = build_options(args.format, output_dir, cookies=args.cookies)
 
     try:
         assert YoutubeDL is not None  # check_dependencies to zaručil
@@ -264,15 +280,30 @@ def run(args: argparse.Namespace) -> int:
                 emit({"status": "error", "error": "Nepodařilo se získat metadata videa."})
                 return 1
 
+            duration = info.get("duration")
             emit(
                 {
                     "status": "metadata",
                     "title": info.get("title", "N/A"),
-                    "duration": info.get("duration"),
+                    "duration": duration,
                     "uploader": info.get("uploader"),
                     "is_playlist": info.get("_type") == "playlist",
                 }
             )
+
+            # Ochrana proti zneužití: odmítni příliš dlouhá videa.
+            if args.max_duration > 0 and isinstance(duration, (int, float)):
+                if duration > args.max_duration:
+                    emit(
+                        {
+                            "status": "error",
+                            "error": (
+                                f"Video je delší ({int(duration)} s) než povolený "
+                                f"limit {args.max_duration} s."
+                            ),
+                        }
+                    )
+                    return 1
 
             # Samotné stažení + postprocessing.
             info = ydl.extract_info(args.url, download=True)

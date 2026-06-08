@@ -156,6 +156,46 @@ Worker lze spustit i samostatně (užitečné pro ladění):
 python3 python_core/downloader.py "URL" --format mp3 --output ./downloads
 ```
 
+## Produkční nasazení (HTTPS + limity)
+
+`docker compose` obsahuje i **Caddy** reverzní proxy s automatickým HTTPS
+(Let's Encrypt). Aplikace samotná naslouchá jen interně, ven jde přes Caddy.
+
+```bash
+# Produkce s reálnou doménou:
+DOMAIN=ytmp.example.com ACME_EMAIL=ty@example.com docker compose up -d --build
+# -> https://ytmp.example.com/  (cert se vyřídí automaticky)
+
+# Lokální test bez domény (self-signed cert pro localhost):
+docker compose up -d --build
+# -> https://localhost/
+```
+
+### Bezpečnostní a provozní opatření
+
+Vše je zapnuté ve výchozím stavu (laditelné přes `serve` přepínače / compose `command`):
+
+| Ochrana | Přepínač | Default | Co řeší |
+|---------|----------|---------|---------|
+| Souběžnost | `--max-concurrent` | 3 | strop souběžných konverzí (CPU/disk/síť) |
+| Fronta | `--max-queue` | 10 | čekající úlohy; přetížení → `429` |
+| Rate limit | `--rate-limit` | 10/min/IP | spam z jedné IP → `429` (respektuje `X-Forwarded-For`) |
+| Délka videa | `--max-duration` | 0 (vyp.) | odmítne dlouhá videa (`429`/error) |
+| URL allowlist | — | vždy | jen YouTube domény (anti-SSRF) → `400` |
+| Body limit | — | 16 KB | velké tělo → `413` |
+| Hlavičky | — | vždy | `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` |
+| TTL úklid | — | 30 min | mazání dokončených úloh (soubor + záznam) |
+
+### YouTube bot-check (cookies)
+
+Z datacenter/VPS IP YouTube občas vyžaduje přihlášení („Sign in to confirm
+you're not a bot"). Předej exportovaný cookies soubor:
+
+```bash
+./target/release/ytmp serve --cookies ./cookies.txt   # CLI
+# nebo v docker-compose.yml odkomentuj volume + --cookies
+```
+
 ## Návratové kódy
 
 | Kód | Význam |

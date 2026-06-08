@@ -20,21 +20,23 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{Path, State};
-use axum::http::{header, StatusCode};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio_util::io::ReaderStream;
+use url::Url;
 use uuid::Uuid;
 
 use crate::converter::{execute_job, ConvertError, JobObserver};
@@ -42,6 +44,75 @@ use crate::models::{Job, MediaFormat, ProgressEvent};
 
 /// Doba, po které sweeper smaže dokončenou úlohu (soubor + záznam).
 const JOB_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// Maximální velikost těla requestu (URL jsou malé; bráníme se zneúměrnému vstupu).
+const MAX_BODY_BYTES: usize = 16 * 1024;
+
+/// Konfigurace serveru předaná z CLI.
+pub struct ServeConfig {
+    pub addr: SocketAddr,
+    pub python_cmd: String,
+    pub script_path: PathBuf,
+    pub data_dir: PathBuf,
+    pub force: bool,
+    /// Max. souběžně běžících konverzí.
+    pub max_active: usize,
+    /// Max. čekajících ve frontě nad rámec běžících.
+    pub max_queue: usize,
+    /// Max. počet úloh na jednu IP za minutu.
+    pub rate_per_min: usize,
+    /// Max. délka videa v sekundách (None = bez limitu).
+    pub max_duration: Option<u64>,
+    /// Cookies soubor pro yt-dlp.
+    pub cookies: Option<PathBuf>,
+}
+
+/// Per-IP rate limiter (klouzavé okno).
+struct RateLimiter {
+    window: Duration,
+    max: usize,
+    hits: Mutex<HashMap<String, Vec<Instant>>>,
+}
+
+impl RateLimiter {
+    fn new(max: usize, window: Duration) -> Self {
+        Self {
+            window,
+            max,
+            hits: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Vrátí `true`, pokud je požadavek povolen (a započítá ho).
+    fn check(&self, key: &str) -> bool {
+        if self.max == 0 {
+            return true; // 0 = limit vypnut
+        }
+        let now = Instant::now();
+        let Ok(mut map) = self.hits.lock() else {
+            return true;
+        };
+        let bucket = map.entry(key.to_string()).or_default();
+        bucket.retain(|t| now.duration_since(*t) < self.window);
+        if bucket.len() >= self.max {
+            false
+        } else {
+            bucket.push(now);
+            true
+        }
+    }
+
+    /// Odstraní prázdné/staré záznamy (volá sweeper).
+    fn prune(&self) {
+        let now = Instant::now();
+        if let Ok(mut map) = self.hits.lock() {
+            for bucket in map.values_mut() {
+                bucket.retain(|t| now.duration_since(*t) < self.window);
+            }
+            map.retain(|_, v| !v.is_empty());
+        }
+    }
+}
 
 /// Append-only log událostí jedné úlohy + metadata pro download a úklid.
 struct JobLog {
@@ -123,9 +194,57 @@ struct ApiState {
     script_path: PathBuf,
     /// Kořenový adresář pro pracovní per-job složky.
     data_dir: PathBuf,
+    /// Omezuje počet souběžně běžících konverzí.
+    sem: Arc<Semaphore>,
+    /// Počet právě běžících + čekajících úloh (backpressure).
+    inflight: AtomicUsize,
+    /// Strop běžících + čekajících úloh.
+    capacity: usize,
+    /// Per-IP rate limiter.
+    rate: RateLimiter,
+    /// Max. délka videa v sekundách (None = bez limitu).
+    max_duration: Option<u64>,
+    /// Cookies soubor pro yt-dlp.
+    cookies: Option<PathBuf>,
 }
 
 type SharedState = Arc<ApiState>;
+
+/// Domény YouTube, které smí worker zpracovat (anti-SSRF / anti-zneužití).
+fn is_allowed_youtube(raw: &str) -> bool {
+    let Ok(parsed) = Url::parse(raw) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(host.as_str());
+    matches!(
+        host,
+        "youtube.com"
+            | "m.youtube.com"
+            | "music.youtube.com"
+            | "youtu.be"
+            | "youtube-nocookie.com"
+    )
+}
+
+/// Zjistí IP klienta (preferuje `X-Forwarded-For` za reverzní proxy).
+fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+    }
+    peer.ip().to_string()
+}
 
 /// Observer, který zapisuje syrové JSON řádky do `JobLog` a zachytí
 /// finální cestu k souboru.
@@ -188,61 +307,94 @@ async fn health() -> impl IntoResponse {
 
 async fn submit_job(
     State(state): State<SharedState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<JobRequest>,
 ) -> Result<Json<JobResponse>, ApiError> {
+    // 1) Rate limiting per IP.
+    let ip = client_ip(&headers, peer);
+    if !state.rate.check(&ip) {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "příliš mnoho požadavků, zkus to za chvíli".to_string(),
+        ));
+    }
+
+    // 2) Validace formátu.
     let format: MediaFormat = req
         .format
         .parse()
         .map_err(|e: String| ApiError(StatusCode::BAD_REQUEST, e))?;
 
-    if req.url.trim().is_empty() {
+    // 3) Allowlist: jen YouTube URL (anti-SSRF / anti-zneužití).
+    if !is_allowed_youtube(req.url.trim()) {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "pole 'url' nesmí být prázdné".to_string(),
+            "povolené jsou pouze YouTube URL (youtube.com, youtu.be)".to_string(),
+        ));
+    }
+
+    // 4) Backpressure: strop běžících + čekajících úloh.
+    let prev = state.inflight.fetch_add(1, Ordering::SeqCst);
+    if prev >= state.capacity {
+        state.inflight.fetch_sub(1, Ordering::SeqCst);
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "server je vytížený, zkus to prosím za chvíli".to_string(),
         ));
     }
 
     let id = Uuid::new_v4();
     // Každá úloha má vlastní izolovaný adresář pod data_dir.
     let job_dir = state.data_dir.join(id.to_string());
-    tokio::fs::create_dir_all(&job_dir).await.map_err(|e| {
-        ApiError(
+    if let Err(e) = tokio::fs::create_dir_all(&job_dir).await {
+        state.inflight.fetch_sub(1, Ordering::SeqCst);
+        return Err(ApiError(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("nelze vytvořit pracovní adresář: {e}"),
-        )
-    })?;
+        ));
+    }
 
     let job = Job {
         url: req.url,
         format,
         output_dir: job_dir.clone(),
+        max_duration: state.max_duration,
+        cookies: state.cookies.clone(),
     };
 
     let log = Arc::new(JobLog::new(job_dir));
 
     {
-        let mut jobs = state
-            .jobs
-            .lock()
-            .map_err(|_| ApiError(StatusCode::INTERNAL_SERVER_ERROR, "stav serveru".into()))?;
+        let mut jobs = match state.jobs.lock() {
+            Ok(j) => j,
+            Err(_) => {
+                state.inflight.fetch_sub(1, Ordering::SeqCst);
+                return Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, "stav serveru".into()));
+            }
+        };
         jobs.insert(id, Arc::clone(&log));
     }
 
     // Úlohu spustíme na pozadí; klient průběh sleduje přes SSE.
-    let python = state.python_cmd.clone();
-    let script = state.script_path.clone();
+    // Semafor omezuje skutečnou souběžnost — úlohy nad limit počkají ve frontě.
+    let task_state = Arc::clone(&state);
     tokio::spawn(async move {
+        let _permit = task_state.sem.clone().acquire_owned().await;
+        let python = task_state.python_cmd.clone();
+        let script = task_state.script_path.clone();
+
         let mut observer = ChannelObserver {
             log: Arc::clone(&log),
         };
         let result = execute_job(&job, &python, &script, &mut observer).await;
         if let Err(err) = &result {
-            // Chyby orchestrace (např. chybějící Python) ještě nejsou v logu.
             if !matches!(err, ConvertError::Worker { .. }) {
                 log.push(json!({ "status": "error", "error": err.to_string() }).to_string());
             }
         }
         log.finish();
+        task_state.inflight.fetch_sub(1, Ordering::SeqCst);
     });
 
     Ok(Json(JobResponse {
@@ -365,6 +517,16 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// Middleware: přidá základní bezpečnostní hlavičky na každou odpověď.
+async fn security_headers(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    let h = res.headers_mut();
+    h.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    h.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    h.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
+    res
+}
+
 /// Sestaví router se sdíleným stavem.
 fn build_router(state: SharedState) -> Router {
     Router::new()
@@ -373,6 +535,8 @@ fn build_router(state: SharedState) -> Router {
         .route("/jobs", post(submit_job))
         .route("/jobs/{id}/events", get(job_events))
         .route("/jobs/{id}/download", get(download_job))
+        .layer(middleware::from_fn(security_headers))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
 
@@ -398,6 +562,9 @@ fn spawn_cleanup(state: SharedState) {
                 }
                 let _ = tokio::fs::remove_dir_all(&dir).await;
             }
+
+            // Úklid starých záznamů rate limiteru.
+            state.rate.prune();
         }
     });
 }
@@ -492,38 +659,60 @@ async fn bind_listener(
 }
 
 /// Spustí HTTP server. Blokuje, dokud server neskončí.
-pub async fn serve(
-    addr: SocketAddr,
-    python_cmd: String,
-    script_path: PathBuf,
-    data_dir: PathBuf,
-    force: bool,
-) -> Result<(), ConvertError> {
-    if !script_path.exists() {
-        return Err(ConvertError::ScriptNotFound(script_path));
+pub async fn serve(cfg: ServeConfig) -> Result<(), ConvertError> {
+    if !cfg.script_path.exists() {
+        return Err(ConvertError::ScriptNotFound(cfg.script_path));
     }
 
-    tokio::fs::create_dir_all(&data_dir)
+    // Cookies soubor (pokud zadán) musí existovat.
+    if let Some(cookies) = &cfg.cookies {
+        if !cookies.exists() {
+            eprintln!("⚠ Cookies soubor '{}' neexistuje — pokračuji bez něj.", cookies.display());
+        }
+    }
+
+    tokio::fs::create_dir_all(&cfg.data_dir)
         .await
         .map_err(ConvertError::Io)?;
 
+    let max_active = cfg.max_active.max(1);
+    let capacity = max_active + cfg.max_queue;
+
     let state = Arc::new(ApiState {
         jobs: Mutex::new(HashMap::new()),
-        python_cmd,
-        script_path,
-        data_dir,
+        python_cmd: cfg.python_cmd,
+        script_path: cfg.script_path,
+        data_dir: cfg.data_dir,
+        sem: Arc::new(Semaphore::new(max_active)),
+        inflight: AtomicUsize::new(0),
+        capacity,
+        rate: RateLimiter::new(cfg.rate_per_min, Duration::from_secs(60)),
+        max_duration: cfg.max_duration,
+        cookies: cfg.cookies.filter(|c| c.exists()),
     });
 
     spawn_cleanup(Arc::clone(&state));
     let app = build_router(state);
 
-    let listener = bind_listener(addr, force).await?;
+    let addr = cfg.addr;
+    let listener = bind_listener(addr, cfg.force).await?;
 
     println!("▶ Web UI:  http://{addr}/");
+    println!(
+        "  limity: {max_active} souběžně, fronta {}, {} req/min/IP",
+        capacity - max_active,
+        cfg.rate_per_min
+    );
     println!("  POST http://{addr}/jobs   body: {{\"url\":\"...\",\"format\":\"mp3\"}}");
     println!("  GET  http://{addr}/jobs/<id>/events    (SSE)");
     println!("  GET  http://{addr}/jobs/<id>/download  (soubor)");
 
-    axum::serve(listener, app).await.map_err(ConvertError::Io)?;
+    // `into_make_service_with_connect_info` zpřístupní IP klienta (rate limiting).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(ConvertError::Io)?;
     Ok(())
 }

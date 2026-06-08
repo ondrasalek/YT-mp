@@ -84,6 +84,26 @@ struct ServeArgs {
     #[arg(long, default_value = "./data")]
     data_dir: PathBuf,
 
+    /// Max. počet souběžně běžících konverzí.
+    #[arg(long, default_value_t = 3)]
+    max_concurrent: usize,
+
+    /// Max. počet úloh čekajících ve frontě (nad rámec běžících).
+    #[arg(long, default_value_t = 10)]
+    max_queue: usize,
+
+    /// Max. počet úloh na jednu IP za minutu (0 = bez limitu).
+    #[arg(long, default_value_t = 10)]
+    rate_limit: usize,
+
+    /// Max. délka videa v sekundách (0 = bez limitu).
+    #[arg(long, default_value_t = 0)]
+    max_duration: u64,
+
+    /// Cookies soubor pro yt-dlp (obejití bot-checku na YouTube).
+    #[arg(long)]
+    cookies: Option<PathBuf>,
+
     /// Cesta k Python interpretu (jinak se zkusí python3, pak python).
     #[arg(long)]
     python: Option<String>,
@@ -123,6 +143,8 @@ async fn run_download(args: DownloadArgs) -> ExitCode {
             url,
             format: args.format,
             output_dir: args.output.clone(),
+            max_duration: None,
+            cookies: None,
         })
         .collect();
 
@@ -159,7 +181,19 @@ async fn run_serve(args: ServeArgs) -> ExitCode {
     };
 
     let addr = SocketAddr::new(args.host, args.port);
-    match api::serve(addr, python_cmd, script_path, args.data_dir, args.force).await {
+    let cfg = api::ServeConfig {
+        addr,
+        python_cmd,
+        script_path,
+        data_dir: args.data_dir,
+        force: args.force,
+        max_active: args.max_concurrent,
+        max_queue: args.max_queue,
+        rate_per_min: args.rate_limit,
+        max_duration: (args.max_duration > 0).then_some(args.max_duration),
+        cookies: args.cookies,
+    };
+    match api::serve(cfg).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("✖ Server selhal: {err}");

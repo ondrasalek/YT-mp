@@ -65,6 +65,10 @@ pub struct Job {
     pub url: String,
     pub format: MediaFormat,
     pub output_dir: PathBuf,
+    /// Max. povolená délka videa v sekundách (None = bez limitu).
+    pub max_duration: Option<u64>,
+    /// Volitelný cookies soubor pro yt-dlp (obejití bot-check na YouTube).
+    pub cookies: Option<PathBuf>,
 }
 
 /// Událost progressu deserializovaná z jednoho JSON řádku Python workeru.

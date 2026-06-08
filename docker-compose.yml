@@ -3,16 +3,31 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ytmp:0.2.0
+    image: ytmp:0.3.0
     container_name: ytmp
-    ports:
-      - "8080:8080"
+    # Port se nepublikuje na hostitele — přístup jde přes Caddy (TLS).
+    expose:
+      - "8080"
     volumes:
       # Dočasné per-job soubory (volitelné — mažou se po TTL i bez volume).
-      # Hodí se pro přežití restartu nebo inspekci; jinak lze řádek smazat.
       - ./data:/app/data
+      # Volitelně cookies pro obejití YouTube bot-checku (odkomentuj + dodej soubor):
+      # - ./cookies.txt:/app/cookies.txt:ro
     environment:
       - PYTHONUNBUFFERED=1
+    # Produkční limity — uprav dle výkonu serveru.
+    command:
+      - ytmp
+      - serve
+      - --host=0.0.0.0
+      - --port=8080
+      - --python=python3
+      - --data-dir=/app/data
+      - --max-concurrent=3
+      - --max-queue=20
+      - --rate-limit=10
+      - --max-duration=10800   # 3 h; 0 = bez limitu
+      # - --cookies=/app/cookies.txt
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8080/health').status==200 else sys.exit(1)"]
@@ -20,3 +35,25 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ytmp-caddy
+    depends_on:
+      - ytmp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Pro produkci nastav reálnou doménu a e-mail (ACME/Let's Encrypt).
+      - DOMAIN=${DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

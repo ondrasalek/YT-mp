@@ -1,6 +1,6 @@
 [package]
 name = "ytmp"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "YouTube -> MP3/MP4 konvertor: Rust orchestrační jádro nad Python yt-dlp workerem."
 license = "MIT"
@@ -20,6 +20,7 @@ thiserror = "1"
 axum = "0.8"
 async-stream = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
 
 [profile.release]
 lto = true
