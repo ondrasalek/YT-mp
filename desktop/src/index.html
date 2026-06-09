@@ -140,20 +140,29 @@
     .open-btn.secondary { background: var(--border); color: var(--text); }
     .open-btn:hover { filter: brightness(1.08); }
 
-    /* ---------- Settings panel ---------- */
-    .settings {
+    /* ---------- Settings dialog ---------- */
+    dialog.settings {
       background: var(--panel);
+      color: var(--text);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 18px 20px;
-      margin-bottom: 18px;
-      display: none;
-      box-shadow: 0 10px 30px var(--shadow);
+      border-radius: 14px;
+      padding: 22px 24px;
+      width: min(440px, 92vw);
+      box-shadow: 0 24px 70px var(--shadow);
     }
-    .settings.open { display: block; }
-    .settings h2 { font-size: var(--f2); margin: 0 0 14px; }
-    .settings .grid { display: grid; gap: 14px; }
-    @media (min-width: 480px) { .settings .grid { grid-template-columns: 1fr 1fr 1fr; } }
+    dialog.settings::backdrop { background: rgba(0, 0, 0, 0.45); }
+    .settings-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 18px;
+    }
+    .settings-head h2 { font-size: var(--f2); margin: 0; }
+    .dialog-close {
+      background: transparent; border: 0; color: var(--muted);
+      font-size: 18px; line-height: 1; cursor: pointer;
+      padding: 4px 9px; border-radius: 8px;
+    }
+    .dialog-close:hover { background: var(--input-bg); color: var(--text); }
+    .settings .grid { display: grid; gap: 16px; }
 
     .disclaimer {
       margin-top: 28px;
@@ -208,8 +217,11 @@
       <button id="gear" class="gear" type="button" title="Nastavení" aria-label="Nastavení">⚙</button>
     </div>
 
-    <section id="settings" class="settings">
-      <h2 data-i18n="settingsTitle">Nastavení</h2>
+    <dialog id="settings" class="settings">
+      <div class="settings-head">
+        <h2 data-i18n="settingsTitle">Nastavení</h2>
+        <button id="settingsClose" class="dialog-close" type="button" aria-label="Zavřít">✕</button>
+      </div>
       <div class="grid">
         <div>
           <label for="setTheme" data-i18n="theme">Motiv</label>
@@ -235,7 +247,7 @@
           </select>
         </div>
       </div>
-    </section>
+    </dialog>
 
     <form id="form">
       <div>
@@ -357,14 +369,16 @@
     setFont.value = localStorage.getItem("ytmp.fontsize") || "medium";
     setLang.value = lang;
 
-    gearBtn.addEventListener("click", () => settingsEl.classList.toggle("open"));
-    // Nativní menu „Settings…" (macOS, ⌘,) otevře panel nastavení.
-    if (listen) {
-      listen("ytmp:open-settings", () => {
-        settingsEl.classList.add("open");
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      });
-    }
+    const settingsClose = document.getElementById("settingsClose");
+    function openSettings() { if (!settingsEl.open) settingsEl.showModal(); }
+    gearBtn.addEventListener("click", openSettings);
+    settingsClose.addEventListener("click", () => settingsEl.close());
+    // Klik mimo obsah (na backdrop) zavře dialog.
+    settingsEl.addEventListener("click", (e) => {
+      if (e.target === settingsEl) settingsEl.close();
+    });
+    // Nativní menu „Settings…" (macOS, ⌘,) otevře dialog nastavení.
+    if (listen) listen("ytmp:open-settings", openSettings);
     setTheme.addEventListener("change", (e) => {
       localStorage.setItem("ytmp.theme", e.target.value);
       applyTheme(e.target.value);
