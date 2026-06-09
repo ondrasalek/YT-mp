@@ -41,16 +41,18 @@ fn target_triple() -> &'static str {
     option_env!("YTMP_TARGET_TRIPLE").unwrap_or("")
 }
 
-/// Najde přibalenou binárku. Pořadí: vedle exe (bundled .app) ->
-/// `binaries/<name>-<triple>` (dev) -> env `YTMP_YT_DLP` / `YTMP_FFMPEG`.
+/// Najde přibalenou binárku (cross-platform; na Windows řeší příponu `.exe`).
+/// Pořadí: vedle exe (bundled .app/.exe) -> `binaries/<name>-<triple>` (dev)
+/// -> env `YTMP_YT_DLP` / `YTMP_FFMPEG`.
 fn resolve_sidecar(name: &str) -> Option<PathBuf> {
+    let ext = std::env::consts::EXE_SUFFIX; // "" na unixu, ".exe" na Windows
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let plain = dir.join(name);
+            let plain = dir.join(format!("{name}{ext}"));
             if plain.exists() {
                 return Some(plain);
             }
-            let suffixed = dir.join(format!("{name}-{}", target_triple()));
+            let suffixed = dir.join(format!("{name}-{}{ext}", target_triple()));
             if suffixed.exists() {
                 return Some(suffixed);
             }
@@ -58,7 +60,7 @@ fn resolve_sidecar(name: &str) -> Option<PathBuf> {
     }
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("binaries")
-        .join(format!("{name}-{}", target_triple()));
+        .join(format!("{name}-{}{ext}", target_triple()));
     if dev.exists() {
         return Some(dev);
     }

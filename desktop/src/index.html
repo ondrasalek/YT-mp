@@ -358,6 +358,13 @@
     setLang.value = lang;
 
     gearBtn.addEventListener("click", () => settingsEl.classList.toggle("open"));
+    // Nativní menu „Settings…" (macOS, ⌘,) otevře panel nastavení.
+    if (listen) {
+      listen("ytmp:open-settings", () => {
+        settingsEl.classList.add("open");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
     setTheme.addEventListener("change", (e) => {
       localStorage.setItem("ytmp.theme", e.target.value);
       applyTheme(e.target.value);

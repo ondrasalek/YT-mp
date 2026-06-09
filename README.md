@@ -61,6 +61,17 @@ cargo tauri build                  # -> src-tauri/target/release/bundle/dmg/YT-m
 Aplikace je **arm64** (Apple Silicon). Pro Intel Macy je potřeba build s
 `TARGET=x86_64-apple-darwin` (a stáhnout odpovídající binárky).
 
+### Windows (.exe / .msi)
+
+Build pro Windows se dělá **na Windows PC** (Tauri nedělá cross-compile).
+Kompletní postup viz [`desktop/WINDOWS.md`](desktop/WINDOWS.md) — ve zkratce:
+
+```powershell
+cd desktop
+powershell -ExecutionPolicy Bypass -File scripts\fetch-binaries.ps1
+cargo tauri build   # -> bundle\nsis\*-setup.exe  a  bundle\msi\*.msi
+```
+
 ### Podpis
 
 Build je **ad-hoc podepsaný** (Tauri to dělá automaticky) — na vlastním Macu

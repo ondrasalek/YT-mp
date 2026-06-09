@@ -26,7 +26,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "dmg",
+    "targets": "all",
     "externalBin": [
       "binaries/yt-dlp",
       "binaries/ffmpeg"
