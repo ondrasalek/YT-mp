@@ -1,0 +1,4 @@
+# Přibalené sidecar binárky se do gitu nedávají (velké, platformové).
+# Stáhni je: ../../scripts/fetch-binaries.sh
+*
+!.gitignore

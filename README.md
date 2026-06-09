@@ -1,253 +1,83 @@
-# YouTube Video Converter to MP3/MP4
+# YT-mp — YouTube → MP3/MP4 (desktop)
 
-Hybridní aplikace: **Rust** orchestrační jádro (fronta úloh, paralelismus, CLI)
-nad **Python** workerem (`yt-dlp` + `ffmpeg`).
+Nativní **desktopová** aplikace (Tauri + Rust) pro stahování a převod YouTube
+videí do **MP3 (320k)** nebo **MP4**. Běží lokálně na počítači uživatele,
+takže stahuje **z jeho IP** — žádný YouTube „Sign in to confirm you're not a
+bot" (ten řeší jen datacentrové IP) a žádný server k provozování.
+
+Přibalené `yt-dlp` a `ffmpeg` jako sidecar binárky → aplikace je
+**samostatná**, nevyžaduje Python, Homebrew ani nic dalšího.
 
 ```
-.
-├── python_core/        # Media worker (stahování + postprocessing)
-│   ├── downloader.py
-│   └── requirements.txt
-└── rust_backend/       # Orchestrace a CLI
-    ├── Cargo.toml
+desktop/
+├── src/
+│   └── index.html          # frontend (UI, i18n, motivy) — bez build stepu
+├── scripts/
+│   └── fetch-binaries.sh   # stáhne yt-dlp + ffmpeg do src-tauri/binaries/
+└── src-tauri/
+    ├── tauri.conf.json     # konfigurace okna, bundle, externalBin (sidecary)
+    ├── build.rs            # zpřístupní cílový triple za běhu
+    ├── capabilities/       # oprávnění (dialog, opener)
+    ├── icons/              # ikony aplikace
+    ├── binaries/           # yt-dlp/ffmpeg (gitignored, viz fetch-binaries.sh)
     └── src/
-        ├── main.rs       # CLI (clap): subkomandy download / serve
-        ├── models.rs     # serde modely (config + progress)
-        ├── converter.rs  # tokio subprocess, fronta úloh, JobObserver
-        └── api.rs        # axum HTTP API + SSE stream progressu
+        ├── main.rs         # Tauri builder + command start_job
+        └── downloader.rs   # orchestrace yt-dlp (tagované JSON přes templates)
 ```
 
-## Architektura
+## Jak to funguje
 
 ```
-            argumenty (bez shellu)             NDJSON na stdout
-  Rust  ──────────────────────────►  Python  ──────────────────────►  Rust
- (tokio::process)                  (yt-dlp/ffmpeg)               (serde_json → progress bar)
+              invoke("start_job")                  yt-dlp (sidecar)
+  Frontend ──────────────────────►  Rust  ──────────────────────────►  YouTube
+  (webview)                      (tokio::process)   --print / --progress-template
+       ▲                                                    │  (tagovaný JSON)
+       └──────────  event "ytmp:progress"  ◄────────────────┘
 ```
 
-Komunikace probíhá přes proud JSON objektů (jeden na řádek) na stdout. stderr
-nese diagnostiku. Argumenty se předávají jako pole → **odolnost vůči command
-injection**.
+`yt-dlp` je donucen vypisovat rovnou JSON (`--print` + `--progress-template`),
+který Rust přečte, převede na jednotný kontrakt a přepošle do frontendu jako
+Tauri událost. Argumenty se předávají jako pole → odolnost vůči command
+injection. ffmpeg se předává přes `--ffmpeg-location` (přibalený sidecar).
 
-## Předpoklady
+## Vývoj
 
-- Python 3.10+
-- `ffmpeg` v PATH (`brew install ffmpeg` / `apt install ffmpeg`)
-- Rust toolchain (`cargo`)
-
-## Instalace Python závislostí (venv)
-
-Moderní distribuce (Homebrew, Debian) mají systémový Python „externally-managed"
-(PEP 668), takže `pip install` do něj selže. Použij virtuální prostředí:
+Předpoklady: [Rust](https://rustup.rs), Node (jen pro Tauri CLI),
+`cargo install tauri-cli --version "^2.0"`.
 
 ```bash
-python3 -m venv .venv
-./.venv/bin/pip install -r python_core/requirements.txt
+cd desktop
+./scripts/fetch-binaries.sh        # jednorázově stáhne yt-dlp + ffmpeg
+cargo tauri dev                    # spustí aplikaci v dev režimu (hot-reload UI)
 ```
 
-Rust aplikaci pak nasměruj na tento interpret přes `--python ./.venv/bin/python`
-(nebo `--python "$(pwd)/.venv/bin/python"` při běhu z jiného adresáře).
-
-## Sestavení
+## Build (.dmg)
 
 ```bash
-cd rust_backend
-cargo build --release
+cd desktop
+cargo tauri build                  # -> src-tauri/target/release/bundle/dmg/YT-mp_*.dmg
 ```
 
-## Hotový image z registry (CI)
+Aplikace je **arm64** (Apple Silicon). Pro Intel Macy je potřeba build s
+`TARGET=x86_64-apple-darwin` (a stáhnout odpovídající binárky).
 
-Při každém tagu `vX.Y.Z` sestaví **Gitea Actions** (`.gitea/workflows/docker.yml`)
-image a pushne ho do registry. Lze ho rovnou stáhnout:
+### Podpis
 
-```bash
-docker login git.slks.cz
-docker pull git.slks.cz/ondrej/yt-mp:latest      # nebo konkrétní verze, např. :0.3.1
-docker run -p 8080:8080 git.slks.cz/ondrej/yt-mp:latest
-```
+Build je **ad-hoc podepsaný** (Tauri to dělá automaticky) — na vlastním Macu
+běží bez problémů. Při distribuci ostatním (stažení .dmg) macOS Gatekeeper
+zobrazí varování → pravým tlačítkem → *Otevřít* napoprvé. Pro čistou instalaci
+bez varování je potřeba Apple Developer ID a notarizace.
 
-## Spuštění přes Docker (lokální build)
+## Funkce
 
-Nejjednodušší cesta — vše (Rust binárka, Python + yt-dlp, ffmpeg) je v jednom
-obrazu, není potřeba nic instalovat lokálně:
+- MP3 (audio 320k) / MP4 (video), video i playlist
+- Výběr cílové složky (pamatuje si poslední), tlačítka *Otevřít soubor* /
+  *Ukázat ve složce*
+- Živý progress (rychlost, ETA, %) přes Tauri události
+- **Nastavení**: motiv (světlý/tmavý/systém), velikost písma, jazyk (cs/en)
+- Vše se ukládá lokálně (localStorage)
 
-```bash
-docker compose up --build
-# -> Web UI na http://127.0.0.1:8080/
-```
+## Poznámka k použití
 
-Soubory se streamují do prohlížeče uživatele; na serveru leží jen dočasně
-v `./data` (per-job, mazáno po 30 min). Volume `./data:/app/data` v compose je
-volitelný — hodí se pro přežití restartu nebo inspekci, jinak ho lze smazat.
-
-## Použití — CLI (`download`)
-
-```bash
-# Jedno video do MP3 (320 kbps)
-./target/release/ytmp download "https://youtu.be/VIDEO_ID" \
-  --format mp3 --output ./downloads --python ./.venv/bin/python
-
-# Více URL / playlist paralelně (2 souběžné úlohy)
-./target/release/ytmp download URL1 URL2 -f mp4 -o ./downloads -j 2 --python ./.venv/bin/python
-```
-
-| Přepínač | Význam | Výchozí |
-|----------|--------|---------|
-| `URL...` | jedno či více YouTube URL (i playlisty) | — |
-| `-f, --format` | `mp3` \| `mp4` | `mp4` |
-| `-o, --output` | výstupní adresář | `./downloads` |
-| `-j, --concurrency` | max. souběžných úloh | `2` |
-| `--python` | cesta k interpretu | autodetekce |
-| `--script` | cesta k `downloader.py` | autodetekce |
-
-## Použití — Web UI + HTTP API (`serve`)
-
-```bash
-./target/release/ytmp serve --host 127.0.0.1 --port 8080 --python ./.venv/bin/python
-```
-
-Otevři **http://127.0.0.1:8080/** — webové rozhraní (vložené přímo v binárce)
-s formulářem a živým progress barem přes SSE.
-
-**Model webové aplikace:** server stáhne médium do dočasného **per-job**
-adresáře (`--data-dir`, výchozí `./data`) a po dokončení ho **streamuje do
-prohlížeče uživatele** jako download. Uživatel je vzdálený — nic se na server
-neukládá natrvalo ani se nevybírá cílová složka. Dokončené úlohy (soubor i
-záznam) maže background sweeper po 30 minutách.
-
-### Dev: obsazený port (`--force`)
-
-Pokud při vývoji zůstane na portu viset starý server, příště to server pozná:
-
-```bash
-# Bez --force: srozumitelná chyba s PID, který port drží
-./target/release/ytmp serve --port 8080
-# ✖ Port 8080 je již obsazen. Starý ytmp server (PID [12345]) stále běží.
-#   Spusť s --force pro automatické ukončení, nebo: kill 12345
-
-# S --force: starý ytmp server se bezpečně ukončí a port se uvolní
-./target/release/ytmp serve --port 8080 --force
-```
-
-`--force` ukončí **pouze** proces, jehož příkazová řádka obsahuje `ytmp`
-(ověřeno přes `ps`/`lsof`) — cizí procesy na portu nikdy nezabíjí.
-
-### Endpointy
-
-| Endpoint | Popis |
-|----------|-------|
-| `GET /` | webové UI (HTML + JS, konzumuje SSE) |
-| `GET /health` | liveness check |
-| `POST /jobs` | zařadí úlohu, vrátí `job_id`, `events_url`, `download_url` |
-| `GET /jobs/{id}/events` | SSE proud JSON událostí (s replayem historie) |
-| `GET /jobs/{id}/download` | stáhne hotový soubor (příloha, správný `Content-Type`) |
-
-```bash
-# 1) zařazení úlohy
-curl -X POST http://127.0.0.1:8080/jobs \
-  -H 'Content-Type: application/json' \
-  -d '{"url":"https://youtu.be/VIDEO_ID","format":"mp3"}'
-# -> {"job_id":"<uuid>","events_url":"/jobs/<uuid>/events","download_url":"/jobs/<uuid>/download"}
-
-# 2) sledování progressu (Server-Sent Events)
-curl -N http://127.0.0.1:8080/jobs/<uuid>/events
-# data: {"status":"downloading","progress":45.2,"speed":"2.3MiB/s","eta":"00:15"}
-# data: {"status":"finished",...}
-
-# 3) stažení hotového souboru do prohlížeče/klienta
-curl -OJ http://127.0.0.1:8080/jobs/<uuid>/download
-```
-
-Jádro je sdílené: stejný proud událostí napájí přes `JobObserver` buď terminálový
-progress bar (`download`), nebo SSE stream (`serve`).
-
-Worker lze spustit i samostatně (užitečné pro ladění):
-
-```bash
-python3 python_core/downloader.py "URL" --format mp3 --output ./downloads
-```
-
-## Produkční nasazení (HTTPS + limity)
-
-Dvě varianty podle toho, co je před aplikací (detaily v [`DEPLOY.md`](DEPLOY.md)):
-
-| Scénář | Soubor | Proxy / HTTPS |
-|--------|--------|---------------|
-| **Coolify** (vedle Gitea) | `docker-compose.coolify.yml` | řeší Coolify |
-| **Samostatný VPS** | `docker-compose.yml` | vlastní Caddy (auto-HTTPS) |
-
-```bash
-# A) Coolify: jen kontejner ytmp z registry, doménu/TLS řeší Coolify
-docker compose -f docker-compose.coolify.yml up -d
-
-# B) Samostatný server: ytmp + Caddy s automatickým HTTPS
-DOMAIN=ytmp.example.com ACME_EMAIL=ty@example.com docker compose up -d --build
-# lokální test bez domény (self-signed): docker compose up -d --build  -> https://localhost/
-```
-
-### Bezpečnostní a provozní opatření
-
-Vše je zapnuté ve výchozím stavu (laditelné přes `serve` přepínače / compose `command`):
-
-| Ochrana | Přepínač | Default | Co řeší |
-|---------|----------|---------|---------|
-| Souběžnost | `--max-concurrent` | 3 | strop souběžných konverzí (CPU/disk/síť) |
-| Fronta | `--max-queue` | 10 | čekající úlohy; přetížení → `429` |
-| Rate limit | `--rate-limit` | 10/min/IP | spam z jedné IP → `429` (respektuje `X-Forwarded-For`) |
-| Délka videa | `--max-duration` | 0 (vyp.) | odmítne dlouhá videa (`429`/error) |
-| URL allowlist | — | vždy | jen YouTube domény (anti-SSRF) → `400` |
-| Body limit | — | 16 KB | velké tělo → `413` |
-| Hlavičky | — | vždy | `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` |
-| TTL úklid | — | 30 min | mazání dokončených úloh (soubor + záznam) |
-
-### YouTube bot-check (cookies)
-
-Z datacenter/VPS IP YouTube občas vyžaduje přihlášení („Sign in to confirm
-you're not a bot"). Řešení: předat exportovaný `cookies.txt` (Netscape formát)
-přes `--cookies`:
-
-```bash
-./target/release/ytmp serve --cookies ./cookies.txt   # CLI
-# nebo v docker-compose.yml/docker-compose.coolify.yml nastav --cookies=...
-```
-
-**Nahrání/refresh cookies za běhu (bez SSH, bez restartu):**
-
-Soubor cookies typicky po čase vyprší a je potřeba ho obnovit. Místo
-kopírování přes SSH/Coolify file mount lze nastavit `--admin-token`
-(nebo proměnnou prostředí `YTMP_ADMIN_TOKEN`) a nahrávat/aktualizovat
-`cookies.txt` přímo přes HTTP endpoint `POST /admin/cookies`:
-
-```bash
-# 1) Vygeneruj náhodný token a nastav ho na serveru:
-openssl rand -hex 32
-#   ./target/release/ytmp serve --cookies ./data/cookies.txt --admin-token <TOKEN>
-#   (nebo env YTMP_ADMIN_TOKEN=<TOKEN>; v Coolify jako proměnná prostředí)
-
-# 2) Nahraj/aktualizuj cookies (přepíše stávající soubor atomicky):
-curl -X POST https://tva-domena/admin/cookies \
-     -H "Authorization: Bearer <TOKEN>" \
-     --data-binary @cookies.txt
-```
-
-Poznámky:
-- Endpoint je vypnutý (vrací `404`), pokud `--admin-token`/`YTMP_ADMIN_TOKEN`
-  není nastaven, nebo pokud token v `Authorization: Bearer ...` nesedí —
-  útočník tak nepozná, jestli endpoint vůbec existuje.
-- Validuje se Netscape formát a velikost (limit 512 KB); zápis je atomický
-  (přes dočasný soubor + `rename`) a soubor dostane oprávnění `0600`.
-- Cesta zadaná v `--cookies` nemusí při startu existovat — server ji
-  zkontroluje při každé úloze, takže nahrání nového souboru funguje
-  okamžitě, bez restartu/redeploye.
-- **Nikdy nevkládej obsah `cookies.txt` (živé session cookies) do chatu,
-  issue, PR ani jiného sdíleného místa** — kdokoliv s nimi může převzít
-  tvůj Google účet. Pokud k tomu omylem dojde, okamžitě v Google účtu
-  odhlas všechna zařízení / změň heslo a vyexportuj cookies znovu.
-
-## Návratové kódy
-
-| Kód | Význam |
-|-----|--------|
-| 0 | vše OK |
-| 1 | aspoň jedna úloha selhala / obecná chyba |
-| 2 | chybějící závislost (yt-dlp, ffmpeg, Python, skript) |
+Stahuj pouze obsah, ke kterému máš práva. Respektuj
+[podmínky YouTube](https://www.youtube.com/t/terms) a autorská práva.

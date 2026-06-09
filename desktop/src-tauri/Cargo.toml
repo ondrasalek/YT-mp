@@ -1,0 +1,26 @@
+[package]
+name = "ytmp-desktop"
+version = "0.4.0"
+edition = "2021"
+description = "YouTube -> MP3/MP4 konvertor jako desktop aplikace (Tauri + Rust jádro nad yt-dlp)."
+license = "MIT"
+
+[[bin]]
+name = "ytmp-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util"] }
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = true
+opt-level = 3

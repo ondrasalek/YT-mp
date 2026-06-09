@@ -1,7 +1,15 @@
-# Rust
-/rust_backend/target/
+# Rust / Tauri build output
+/desktop/src-tauri/target/
 
-# Python
+# Tauri generated schemas (regenerated on build)
+/desktop/src-tauri/gen/
+
+# Přibalené binárky (yt-dlp, ffmpeg) — stahuje je scripts/fetch-binaries.sh,
+# do gitu nepatří (velké, platformově závislé).
+/desktop/src-tauri/binaries/*
+!/desktop/src-tauri/binaries/.gitignore
+
+# Python (lokální venv, pokud zůstane)
 .venv/
 __pycache__/
 *.pyc
@@ -9,4 +17,6 @@ __pycache__/
 # Výstupy / dočasná data
 /downloads/
 /data/
-/rust_backend/data/
+
+# macOS
+.DS_Store

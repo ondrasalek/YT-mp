@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YT-mp — YouTube → MP3/MP4</title>
+  <!-- Nastav motiv/velikost/jazyk co nejdřív, ať není problik (FOUC). -->
+  <script>
+    (function () {
+      const d = document.documentElement;
+      const theme = localStorage.getItem("ytmp.theme") || "system";
+      const resolvedTheme = theme === "system"
+        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+        : theme;
+      d.dataset.theme = resolvedTheme;
+      d.dataset.fontsize = localStorage.getItem("ytmp.fontsize") || "medium";
+      d.lang = localStorage.getItem("ytmp.lang") || "cs";
+    })();
+  </script>
+  <style>
+    /* ---------- Motivy ---------- */
+    :root[data-theme="dark"] {
+      --bg: #0f1117;
+      --panel: #1a1d27;
+      --border: #2a2e3a;
+      --input-bg: #11141c;
+      --accent: #4f8cff;
+      --ok: #34d399;
+      --err: #f87171;
+      --muted: #8b90a0;
+      --text: #e7e9ee;
+      --shadow: rgba(0,0,0,0.35);
+    }
+    :root[data-theme="light"] {
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --border: #dde2ec;
+      --input-bg: #eef1f7;
+      --accent: #2f6bff;
+      --ok: #0f9d6b;
+      --err: #d23b3b;
+      --muted: #5a6172;
+      --text: #1a1f2b;
+      --shadow: rgba(40,60,110,0.12);
+    }
+    /* ---------- Velikost písma ---------- */
+    :root[data-fontsize="small"]  { --f1: 20px; --f2: 14px; --f3: 13px; --f4: 12px; --f5: 10.5px; }
+    :root[data-fontsize="medium"] { --f1: 22px; --f2: 15px; --f3: 14px; --f4: 13px; --f5: 11px; }
+    :root[data-fontsize="large"]  { --f1: 26px; --f2: 17px; --f3: 16px; --f4: 14px; --f5: 12.5px; }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 32px 16px;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+    .wrap { width: 100%; max-width: 720px; position: relative; }
+    .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    h1 { font-size: var(--f1); margin: 0 0 4px; }
+    .sub { color: var(--muted); margin: 0 0 24px; font-size: var(--f3); }
+    .gear {
+      flex: none;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--text);
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s ease;
+    }
+    .gear:hover { background: var(--input-bg); }
+
+    form {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+    label { font-size: var(--f4); color: var(--muted); display: block; margin-bottom: 6px; }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: var(--f3);
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: var(--f2);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.ghost {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-weight: 500;
+      font-size: var(--f4);
+      padding: 10px 12px;
+      white-space: nowrap;
+    }
+    .folder-row { display: flex; gap: 10px; align-items: flex-end; }
+    .folder-row > div { flex: 1; min-width: 0; }
+    #outDir {
+      cursor: default;
+      color: var(--muted);
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .actions { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .actions:empty { margin-top: 0; }
+    .open-btn {
+      display: inline-block;
+      background: var(--ok);
+      color: #06281d;
+      font-weight: 700;
+      border: 0;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: var(--f3);
+      cursor: pointer;
+    }
+    .open-btn.secondary { background: var(--border); color: var(--text); }
+    .open-btn:hover { filter: brightness(1.08); }
+
+    /* ---------- Settings panel ---------- */
+    .settings {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 18px;
+      display: none;
+      box-shadow: 0 10px 30px var(--shadow);
+    }
+    .settings.open { display: block; }
+    .settings h2 { font-size: var(--f2); margin: 0 0 14px; }
+    .settings .grid { display: grid; gap: 14px; }
+    @media (min-width: 480px) { .settings .grid { grid-template-columns: 1fr 1fr 1fr; } }
+
+    .disclaimer {
+      margin-top: 28px;
+      font-size: var(--f5);
+      line-height: 1.5;
+      color: var(--muted);
+      text-align: center;
+    }
+    .disclaimer a { color: var(--muted); }
+    .jobs { margin-top: 24px; display: grid; gap: 14px; }
+    .job {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .job .title { font-size: var(--f3); font-weight: 600; word-break: break-all; }
+    .job .meta { font-size: var(--f4); color: var(--muted); margin-top: 2px; }
+    .bar-track {
+      height: 10px;
+      background: var(--input-bg);
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 12px 0 8px;
+    }
+    .bar-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.25s ease; }
+    .job.done .bar-fill { background: var(--ok); }
+    .job.error .bar-fill { background: var(--err); }
+    .status { font-size: var(--f4); display: flex; justify-content: space-between; gap: 8px; }
+    .status .state { font-weight: 600; }
+    .status.ok .state { color: var(--ok); }
+    .status.err .state { color: var(--err); }
+    .log {
+      margin-top: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: var(--f5);
+      color: var(--muted);
+      max-height: 120px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <div>
+        <h1 data-i18n="title">YouTube → MP3/MP4</h1>
+        <p class="sub" data-i18n="subtitle">Desktop · běží lokálně z tvé IP</p>
+      </div>
+      <button id="gear" class="gear" type="button" title="Nastavení" aria-label="Nastavení">⚙</button>
+    </div>
+
+    <section id="settings" class="settings">
+      <h2 data-i18n="settingsTitle">Nastavení</h2>
+      <div class="grid">
+        <div>
+          <label for="setTheme" data-i18n="theme">Motiv</label>
+          <select id="setTheme">
+            <option value="system" data-i18n="themeSystem">Systém</option>
+            <option value="light" data-i18n="themeLight">Světlý</option>
+            <option value="dark" data-i18n="themeDark">Tmavý</option>
+          </select>
+        </div>
+        <div>
+          <label for="setFont" data-i18n="fontsize">Velikost písma</label>
+          <select id="setFont">
+            <option value="small" data-i18n="fsSmall">Malá</option>
+            <option value="medium" data-i18n="fsMedium">Střední</option>
+            <option value="large" data-i18n="fsLarge">Velká</option>
+          </select>
+        </div>
+        <div>
+          <label for="setLang" data-i18n="language">Jazyk</label>
+          <select id="setLang">
+            <option value="cs">Čeština</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <form id="form">
+      <div>
+        <label for="url" data-i18n="urlLabel">YouTube URL</label>
+        <input id="url" type="url" data-i18n-ph="urlPlaceholder" placeholder="https://youtu.be/..." required />
+      </div>
+      <div>
+        <label for="format" data-i18n="formatLabel">Formát</label>
+        <select id="format">
+          <option value="mp3" data-i18n="mp3">MP3 (audio 320k)</option>
+          <option value="mp4" selected data-i18n="mp4">MP4 (video)</option>
+        </select>
+      </div>
+      <div class="folder-row">
+        <div>
+          <label for="outDir" data-i18n="folderLabel">Cílová složka</label>
+          <input id="outDir" type="text" readonly data-i18n-ph="folderPlaceholder" placeholder="Vyber složku…" />
+        </div>
+        <button id="pick" type="button" class="ghost" data-i18n="changeFolder">Změnit složku…</button>
+      </div>
+      <button id="submit" type="submit" data-i18n="convert">Převést</button>
+    </form>
+
+    <div id="jobs" class="jobs"></div>
+
+    <p class="disclaimer" data-i18n="disclaimer" data-i18n-html="1">
+      Stahuj pouze obsah, ke kterému máš práva.
+    </p>
+  </div>
+
+  <script>
+    /* ============================ i18n ============================ */
+    const I18N = {
+      cs: {
+        title: "YouTube → MP3/MP4",
+        subtitle: "Desktop · Rust jádro · yt-dlp · běží lokálně z tvé IP",
+        settingsTitle: "Nastavení",
+        theme: "Motiv", themeSystem: "Systém", themeLight: "Světlý", themeDark: "Tmavý",
+        fontsize: "Velikost písma", fsSmall: "Malá", fsMedium: "Střední", fsLarge: "Velká",
+        language: "Jazyk",
+        urlLabel: "YouTube URL (video nebo playlist)",
+        urlPlaceholder: "https://youtu.be/...",
+        formatLabel: "Formát",
+        mp3: "MP3 (audio 320k)", mp4: "MP4 (video)",
+        folderLabel: "Cílová složka",
+        folderPlaceholder: "Vyber složku…",
+        changeFolder: "Změnit složku…",
+        convert: "Převést",
+        disclaimer: 'Stahuj pouze obsah, ke kterému máš práva. Respektuj <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">podmínky YouTube</a> a autorská práva. Soubory se ukládají do zvolené složky na tvém počítači.',
+        openFile: "▶ Otevřít soubor", reveal: "📂 Ukázat ve složce",
+        enqueuing: "Zařazuji…", queued: "Ve frontě",
+        st_starting: "Spouštím…", st_metadata: "Metadata", st_downloading: "Stahuji",
+        st_processing: "Zpracování", st_finished: "Hotovo", st_error: "Chyba", st_warning: "Varování",
+        doneDetail: "Hotovo",
+      },
+      en: {
+        title: "YouTube → MP3/MP4",
+        subtitle: "Desktop · Rust core · yt-dlp · runs locally from your IP",
+        settingsTitle: "Settings",
+        theme: "Theme", themeSystem: "System", themeLight: "Light", themeDark: "Dark",
+        fontsize: "Font size", fsSmall: "Small", fsMedium: "Medium", fsLarge: "Large",
+        language: "Language",
+        urlLabel: "YouTube URL (video or playlist)",
+        urlPlaceholder: "https://youtu.be/...",
+        formatLabel: "Format",
+        mp3: "MP3 (audio 320k)", mp4: "MP4 (video)",
+        folderLabel: "Destination folder",
+        folderPlaceholder: "Choose a folder…",
+        changeFolder: "Change folder…",
+        convert: "Convert",
+        disclaimer: 'Only download content you have the rights to. Respect the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms</a> and copyright. Files are saved to the chosen folder on your computer.',
+        openFile: "▶ Open file", reveal: "📂 Show in folder",
+        enqueuing: "Queuing…", queued: "Queued",
+        st_starting: "Starting…", st_metadata: "Metadata", st_downloading: "Downloading",
+        st_processing: "Processing", st_finished: "Done", st_error: "Error", st_warning: "Warning",
+        doneDetail: "Done",
+      },
+    };
+    let lang = localStorage.getItem("ytmp.lang") || "cs";
+    function t(key) { return (I18N[lang] && I18N[lang][key]) || (I18N.cs[key]) || key; }
+    function applyLang() {
+      document.documentElement.lang = lang;
+      document.querySelectorAll("[data-i18n]").forEach((el) => {
+        const key = el.getAttribute("data-i18n");
+        if (el.hasAttribute("data-i18n-html")) el.innerHTML = t(key);
+        else el.textContent = t(key);
+      });
+      document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+        el.setAttribute("placeholder", t(el.getAttribute("data-i18n-ph")));
+      });
+    }
+
+    /* ===================== Tauri API (defensive) ===================== */
+    const T = window.__TAURI__ || {};
+    const invoke = T.core?.invoke;
+    const listen = T.event?.listen;
+    const dialog = T.dialog || {};
+    const opener = T.opener || {};
+    const path = T.path || {};
+
+    /* ===================== Settings ===================== */
+    const gearBtn = document.getElementById("gear");
+    const settingsEl = document.getElementById("settings");
+    const setTheme = document.getElementById("setTheme");
+    const setFont = document.getElementById("setFont");
+    const setLang = document.getElementById("setLang");
+
+    function resolveTheme(theme) {
+      return theme === "system"
+        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+        : theme;
+    }
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = resolveTheme(theme);
+    }
+
+    // Init controls from storage.
+    setTheme.value = localStorage.getItem("ytmp.theme") || "system";
+    setFont.value = localStorage.getItem("ytmp.fontsize") || "medium";
+    setLang.value = lang;
+
+    gearBtn.addEventListener("click", () => settingsEl.classList.toggle("open"));
+    setTheme.addEventListener("change", (e) => {
+      localStorage.setItem("ytmp.theme", e.target.value);
+      applyTheme(e.target.value);
+    });
+    setFont.addEventListener("change", (e) => {
+      localStorage.setItem("ytmp.fontsize", e.target.value);
+      document.documentElement.dataset.fontsize = e.target.value;
+    });
+    setLang.addEventListener("change", (e) => {
+      lang = e.target.value;
+      localStorage.setItem("ytmp.lang", lang);
+      applyLang();
+    });
+    // Reaguj na změnu systémového motivu, když je zvolen "Systém".
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if ((localStorage.getItem("ytmp.theme") || "system") === "system") applyTheme("system");
+    });
+
+    /* ===================== Jobs ===================== */
+    const form = document.getElementById("form");
+    const jobsEl = document.getElementById("jobs");
+    const outDirEl = document.getElementById("outDir");
+    const pickBtn = document.getElementById("pick");
+    const jobs = new Map();
+
+    async function initOutDir() {
+      const saved = localStorage.getItem("ytmp.outDir");
+      if (saved) { outDirEl.value = saved; return; }
+      try {
+        const dl = await path.join(await path.homeDir(), "Downloads");
+        outDirEl.value = dl;
+        localStorage.setItem("ytmp.outDir", dl);
+      } catch { /* necháme prázdné */ }
+    }
+
+    pickBtn.addEventListener("click", async () => {
+      if (!dialog.open) return;
+      const dir = await dialog.open({ directory: true, multiple: false, defaultPath: outDirEl.value || undefined });
+      if (typeof dir === "string") {
+        outDirEl.value = dir;
+        localStorage.setItem("ytmp.outDir", dir);
+      }
+    });
+
+    function createJobCard(url, format) {
+      const card = document.createElement("div");
+      card.className = "job";
+      card.innerHTML = `
+        <div class="title"></div>
+        <div class="meta">${format.toUpperCase()} · ${url}</div>
+        <div class="bar-track"><div class="bar-fill"></div></div>
+        <div class="status"><span class="state">…</span><span class="detail"></span></div>
+        <div class="actions"></div>
+        <div class="log"></div>`;
+      card.querySelector(".title").textContent = url;
+      jobsEl.prepend(card);
+      return {
+        card,
+        title: card.querySelector(".title"),
+        fill: card.querySelector(".bar-fill"),
+        status: card.querySelector(".status"),
+        state: card.querySelector(".state"),
+        detail: card.querySelector(".detail"),
+        actions: card.querySelector(".actions"),
+        log: card.querySelector(".log"),
+        filepath: null,
+      };
+    }
+
+    function appendLog(ui, obj) {
+      ui.log.textContent += JSON.stringify(obj) + "\n";
+      ui.log.scrollTop = ui.log.scrollHeight;
+    }
+
+    function addOpenButtons(ui) {
+      const openFile = document.createElement("button");
+      openFile.className = "open-btn";
+      openFile.textContent = t("openFile");
+      openFile.onclick = () => ui.filepath && opener.openPath && opener.openPath(ui.filepath);
+
+      const reveal = document.createElement("button");
+      reveal.className = "open-btn secondary";
+      reveal.textContent = t("reveal");
+      reveal.onclick = () => ui.filepath && opener.revealItemInDir && opener.revealItemInDir(ui.filepath);
+
+      ui.actions.appendChild(openFile);
+      ui.actions.appendChild(reveal);
+    }
+
+    function applyEvent(ui, ev) {
+      ui.state.textContent = t("st_" + ev.status) || ev.status;
+      switch (ev.status) {
+        case "metadata":
+          if (ev.title) ui.title.textContent = ev.title;
+          break;
+        case "downloading":
+          ui.fill.style.width = (ev.progress || 0) + "%";
+          ui.detail.textContent = `${ev.progress?.toFixed(1) ?? 0}% · ${ev.speed || ""} · ETA ${ev.eta || ""}`;
+          break;
+        case "processing":
+          ui.detail.textContent = ev.postprocessor || "";
+          break;
+        case "finished":
+          ui.fill.style.width = "100%";
+          ui.card.classList.add("done");
+          ui.status.classList.add("ok");
+          ui.detail.textContent = t("doneDetail");
+          ui.filepath = ev.filepath || null;
+          if (ui.filepath) addOpenButtons(ui);
+          break;
+        case "error":
+          ui.card.classList.add("error");
+          ui.status.classList.add("err");
+          ui.detail.textContent = ev.error || "";
+          break;
+      }
+    }
+
+    if (listen) {
+      listen("ytmp:progress", (event) => {
+        const { job_id, data } = event.payload;
+        const ui = jobs.get(job_id);
+        if (!ui) return;
+        let ev;
+        try { ev = JSON.parse(data); } catch { return; }
+        appendLog(ui, ev);
+        applyEvent(ui, ev);
+        if (ev.status === "finished" || ev.status === "error") jobs.delete(job_id);
+      });
+    }
+
+    async function submitJob(url, format, outputDir) {
+      const ui = createJobCard(url, format);
+      ui.state.textContent = t("enqueuing");
+      try {
+        const jobId = await invoke("start_job", { url, format, outputDir, browser: null });
+        jobs.set(jobId, ui);
+      } catch (e) {
+        ui.card.classList.add("error");
+        ui.status.classList.add("err");
+        ui.state.textContent = t("st_error");
+        ui.detail.textContent = String(e);
+      }
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const url = document.getElementById("url").value.trim();
+      const format = document.getElementById("format").value;
+      const outputDir = outDirEl.value.trim();
+      if (!outputDir) { pickBtn.click(); return; }
+      if (url) submitJob(url, format, outputDir);
+    });
+
+    // První vykreslení.
+    applyLang();
+    initOutDir();
+  </script>
+</body>
+</html>
