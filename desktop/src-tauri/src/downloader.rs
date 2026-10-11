@@ -276,7 +276,16 @@ pub async fn run_job(
     }
 
     let status = child.wait().await;
-    let errors = stderr_handle.await.unwrap_or_default();
+    if cancelled {
+        // Osiřelý potomek (ffmpeg) může držet stderr otevřený -> nečekat na něj,
+        // jinak by UI po kliknutí na Zrušit viselo.
+        stderr_handle.abort();
+    }
+    let errors = if cancelled {
+        String::new()
+    } else {
+        stderr_handle.await.unwrap_or_default()
+    };
 
     if cancelled {
         if let Some(f) = current_file {
@@ -322,7 +331,11 @@ fn remove_partials(filename: &str) {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let partial = name.ends_with(".part") || name.ends_with(".ytdl") || name.ends_with(".temp");
+        let partial = name.ends_with(".part")
+            || name.ends_with(".ytdl")
+            || name.ends_with(".temp")
+            || name.contains(".temp.")
+            || name.contains(".part-Frag");
         if partial && name.starts_with(stem) {
             let _ = std::fs::remove_file(entry.path());
         }

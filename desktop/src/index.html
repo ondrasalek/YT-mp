@@ -334,7 +334,7 @@
       <form id="form" class="composer" autocomplete="off">
         <div class="url-row">
           <svg class="i" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-          <input id="url" type="text" inputmode="url" spellcheck="false" autocapitalize="off" data-i18n-ph="urlPlaceholder" placeholder="https://youtu.be/…" />
+          <input id="url" type="text" inputmode="url" spellcheck="false" autocapitalize="off" data-i18n-ph="urlPlaceholder" placeholder="https://youtu.be/seJ83vfHoIU" />
           <button id="paste" class="icon-btn" type="button" data-i18n-title="paste" aria-label="Paste">
             <svg class="i" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
           </button>
@@ -424,7 +424,7 @@
         theme: "Motiv", themeSystem: "Systém", themeLight: "Světlý", themeDark: "Tmavý",
         fontsize: "Velikost písma", fsSmall: "Malá", fsMedium: "Střední", fsLarge: "Velká",
         language: "Jazyk",
-        urlPlaceholder: "Vlož odkaz na YouTube video nebo playlist…",
+        urlPlaceholder: "Např. https://youtu.be/seJ83vfHoIU",
         paste: "Vložit ze schránky",
         changeFolder: "Změnit cílovou složku…",
         convert: "Stáhnout",
@@ -433,7 +433,7 @@
         emptyText: "Vlož odkaz na video nebo playlist, případně ho sem přetáhni.",
         rights: "Stahuj jen obsah, ke kterému máš práva.",
         disclaimer: 'Stahuj pouze obsah, ke kterému máš práva. Respektuj <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">podmínky YouTube</a> a autorská práva. Soubory se ukládají do zvolené složky na tvém počítači.',
-        openFile: "Otevřít", reveal: "Ve složce", cancel: "Zrušit", remove: "Odebrat", retry: "Znovu", log: "Podrobnosti",
+        openFile: "Otevřít", reveal: "Ve složce", cancel: "Zrušit", cancelling: "Ruším…", remove: "Odebrat", retry: "Znovu", log: "Podrobnosti",
         enqueuing: "Zařazuji…",
         st_starting: "Spouštím…", st_metadata: "Příprava", st_downloading: "Stahuji",
         st_processing: "Zpracování", st_finished: "Hotovo", st_complete: "Hotovo", st_error: "Chyba", st_cancelled: "Zrušeno",
@@ -448,7 +448,7 @@
         theme: "Theme", themeSystem: "System", themeLight: "Light", themeDark: "Dark",
         fontsize: "Font size", fsSmall: "Small", fsMedium: "Medium", fsLarge: "Large",
         language: "Language",
-        urlPlaceholder: "Paste a YouTube video or playlist link…",
+        urlPlaceholder: "e.g. https://youtu.be/seJ83vfHoIU",
         paste: "Paste from clipboard",
         changeFolder: "Change destination folder…",
         convert: "Download",
@@ -457,7 +457,7 @@
         emptyText: "Paste a video or playlist link, or drop it here.",
         rights: "Only download content you have the rights to.",
         disclaimer: 'Only download content you have the rights to. Respect the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms</a> and copyright. Files are saved to the chosen folder on your computer.',
-        openFile: "Open", reveal: "Show in folder", cancel: "Cancel", remove: "Remove", retry: "Retry", log: "Details",
+        openFile: "Open", reveal: "Show in folder", cancel: "Cancel", cancelling: "Cancelling…", remove: "Remove", retry: "Retry", log: "Details",
         enqueuing: "Queuing…",
         st_starting: "Starting…", st_metadata: "Preparing", st_downloading: "Downloading",
         st_processing: "Processing", st_finished: "Done", st_complete: "Done", st_error: "Error", st_cancelled: "Cancelled",
@@ -677,7 +677,7 @@
 
       const acts = el.querySelector(".acts");
       let html = "";
-      if (running) html += btn("soft", ICONS.x, t("cancel"), "cancel");
+      if (running) html += btn("soft", ICONS.x, t(j.cancelRequested ? "cancelling" : "cancel"), "cancel", j.cancelRequested ? "disabled" : "");
       if (j.state === "done" && j.filepath) {
         html += btn("soft", ICONS.open, t("openFile"), "open") + btn("soft", ICONS.reveal, t("reveal"), "reveal");
       }
@@ -783,7 +783,9 @@
       if (!j) return;
       switch (b.dataset.action) {
         case "cancel":
+          if (j.cancelRequested) break;
           j.cancelRequested = true;
+          renderJob(j);
           if (j.remote) invoke("cancel_job", { jobId: j.remote });
           break;
         case "open": j.filepath && opener.openPath?.(j.filepath); break;
