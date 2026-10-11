@@ -3,142 +3,292 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>YT-mp — YouTube → MP3/MP4</title>
-  <!-- Nastav motiv/velikost/jazyk co nejdřív, ať není problik (FOUC). -->
+  <title>YT-mp</title>
+  <!-- Nastav motiv/velikost/jazyk/platformu co nejdřív, ať není problik (FOUC). -->
   <script>
     (function () {
       const d = document.documentElement;
       const theme = localStorage.getItem("ytmp.theme") || "system";
-      const resolvedTheme = theme === "system"
+      d.dataset.theme = theme === "system"
         ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
         : theme;
-      d.dataset.theme = resolvedTheme;
       d.dataset.fontsize = localStorage.getItem("ytmp.fontsize") || "medium";
       d.lang = localStorage.getItem("ytmp.lang") || "cs";
+      if (/Mac/i.test(navigator.platform || navigator.userAgent)) d.classList.add("is-mac");
     })();
   </script>
   <style>
     /* ---------- Motivy ---------- */
+    :root { color-scheme: light dark; }
     :root[data-theme="dark"] {
-      --bg: #0f1117;
-      --panel: #1a1d27;
-      --border: #2a2e3a;
-      --input-bg: #11141c;
-      --accent: #4f8cff;
-      --ok: #34d399;
-      --err: #f87171;
-      --muted: #8b90a0;
-      --text: #e7e9ee;
-      --shadow: rgba(0,0,0,0.35);
+      color-scheme: dark;
+      --bg: #17181c;
+      --bar: #1e2025;
+      --panel: #212329;
+      --panel-2: #2a2d35;
+      --border: rgba(255,255,255,0.09);
+      --input-bg: #17181c;
+      --accent: #4c8dff;
+      --accent-hover: #6aa0ff;
+      --accent-soft: rgba(76,141,255,0.16);
+      --on-accent: #fff;
+      --ok: #3ccf91;
+      --ok-soft: rgba(60,207,145,0.15);
+      --err: #ff6b6b;
+      --err-soft: rgba(255,107,107,0.15);
+      --muted: #9a9fad;
+      --text: #eceef3;
+      --shadow: rgba(0,0,0,0.5);
     }
     :root[data-theme="light"] {
-      --bg: #f4f6fb;
+      color-scheme: light;
+      --bg: #f2f3f6;
+      --bar: #fafafb;
       --panel: #ffffff;
-      --border: #dde2ec;
-      --input-bg: #eef1f7;
+      --panel-2: #eceef3;
+      --border: rgba(0,0,0,0.09);
+      --input-bg: #f2f3f6;
       --accent: #2f6bff;
+      --accent-hover: #1f58e6;
+      --accent-soft: rgba(47,107,255,0.12);
+      --on-accent: #fff;
       --ok: #0f9d6b;
+      --ok-soft: rgba(15,157,107,0.12);
       --err: #d23b3b;
-      --muted: #5a6172;
-      --text: #1a1f2b;
-      --shadow: rgba(40,60,110,0.12);
+      --err-soft: rgba(210,59,59,0.11);
+      --muted: #666d7d;
+      --text: #1a1d26;
+      --shadow: rgba(30,40,80,0.2);
     }
     /* ---------- Velikost písma ---------- */
-    :root[data-fontsize="small"]  { --f1: 20px; --f2: 14px; --f3: 13px; --f4: 12px; --f5: 10.5px; }
-    :root[data-fontsize="medium"] { --f1: 22px; --f2: 15px; --f3: 14px; --f4: 13px; --f5: 11px; }
-    :root[data-fontsize="large"]  { --f1: 26px; --f2: 17px; --f3: 16px; --f4: 14px; --f5: 12.5px; }
+    :root[data-fontsize="small"]  { --f1: 15px; --f2: 13.5px; --f3: 12.5px; --f4: 11.5px; --f5: 10.5px; }
+    :root[data-fontsize="medium"] { --f1: 16px; --f2: 14.5px; --f3: 13.5px; --f4: 12.5px; --f5: 11.5px; }
+    :root[data-fontsize="large"]  { --f1: 18px; --f2: 16.5px; --f3: 15.5px; --f4: 14px;   --f5: 12.5px; }
 
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      font-size: var(--f3);
       background: var(--bg);
       color: var(--text);
+      overflow: hidden;
+      overscroll-behavior: none;
+      -webkit-font-smoothing: antialiased;
+      -webkit-user-select: none;
+      user-select: none;
+      cursor: default;
       display: flex;
-      justify-content: center;
-      padding: 32px 16px;
-      transition: background 0.2s ease, color 0.2s ease;
+      flex-direction: column;
     }
-    .wrap { width: 100%; max-width: 720px; position: relative; }
-    .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    h1 { font-size: var(--f1); margin: 0 0 4px; }
-    .sub { color: var(--muted); margin: 0 0 24px; font-size: var(--f3); }
-    .gear {
+    input, .log, .title { -webkit-user-select: text; user-select: text; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    ::-webkit-scrollbar { width: 10px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; border: 3px solid transparent; }
+
+    svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+    /* ---------- Toolbar (titlebar) ---------- */
+    .toolbar {
       flex: none;
+      height: 46px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px 0 16px;
+      background: var(--bar);
+      border-bottom: 1px solid var(--border);
+    }
+    .is-mac .toolbar { padding-left: 82px; } /* místo pro semafor */
+    .toolbar .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: var(--f2); pointer-events: none; }
+    .brand .logo { width: 20px; height: 20px; border-radius: 6px; background: linear-gradient(135deg, #ff5a5f, #ff2d55); display: grid; place-items: center; color: #fff; }
+    .brand .logo svg { width: 11px; height: 11px; fill: #fff; stroke: none; }
+    .toolbar .spacer { flex: 1; pointer-events: none; }
+
+    .icon-btn {
+      flex: none;
+      width: 30px; height: 30px;
+      display: grid; place-items: center;
+      background: transparent;
+      border: 0; border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background .12s, color .12s;
+    }
+    .icon-btn:hover { background: var(--panel-2); color: var(--text); }
+    .icon-btn:active { transform: scale(.94); }
+
+    /* ---------- Obsah ---------- */
+    main { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 20px 12px; }
+    .container { max-width: 720px; margin: 0 auto; display: grid; gap: 22px; }
+
+    /* ---------- Composer ---------- */
+    .composer {
       background: var(--panel);
       border: 1px solid var(--border);
-      color: var(--text);
-      width: 40px; height: 40px;
-      border-radius: 10px;
-      font-size: 18px;
-      cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: background 0.15s ease;
+      border-radius: 14px;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      box-shadow: 0 1px 2px var(--shadow);
+      transition: border-color .15s, box-shadow .15s;
     }
-    .gear:hover { background: var(--input-bg); }
+    .composer.drag { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .url-row {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0 6px 0 12px;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .url-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .url-row > svg { color: var(--muted); }
+    .url-row input {
+      flex: 1; min-width: 0;
+      background: transparent; border: 0; outline: 0;
+      color: var(--text);
+      font: inherit; font-size: var(--f2);
+      padding: 12px 0;
+      cursor: text;
+    }
+    .url-row input::placeholder { color: var(--muted); opacity: .8; }
+    .url-row .icon-btn { width: 28px; height: 28px; }
 
-    form {
+    .opts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .segmented {
+      display: inline-flex;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 2px;
+    }
+    .segmented button {
+      background: transparent; border: 0; color: var(--muted);
+      font: inherit; font-size: var(--f4); font-weight: 600;
+      padding: 6px 14px; border-radius: 7px; cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      transition: background .12s, color .12s;
+    }
+    .segmented button:hover { color: var(--text); }
+    .segmented button[aria-checked="true"] { background: var(--panel-2); color: var(--text); box-shadow: 0 1px 2px var(--shadow); }
+    .segmented button[aria-checked="true"] svg { color: var(--accent); }
+
+    .folder-btn {
+      flex: 1; min-width: 0;
+      display: flex; align-items: center; gap: 8px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--muted);
+      font: inherit; font-size: var(--f4);
+      padding: 7px 10px;
+      cursor: pointer;
+      text-align: left;
+      transition: background .12s, color .12s;
+    }
+    .folder-btn:hover { background: var(--panel-2); color: var(--text); }
+    .folder-btn span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+    .folder-btn bdi { unicode-bidi: plaintext; }
+
+    .btn {
+      font: inherit; font-size: var(--f3); font-weight: 600;
+      border: 0; border-radius: 9px;
+      padding: 8px 16px;
+      cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      transition: background .12s, opacity .12s, transform .08s;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    .btn.primary { background: var(--accent); color: var(--on-accent); }
+    .btn.primary:not(:disabled):hover { background: var(--accent-hover); }
+    .btn.soft { background: var(--panel-2); color: var(--text); }
+    .btn.soft:hover { filter: brightness(1.08); }
+    .btn.small { padding: 5px 10px; font-size: var(--f4); border-radius: 7px; }
+    .btn.danger { color: var(--err); }
+
+    /* ---------- Fronta ---------- */
+    .section-head { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 10px; }
+    .section-head h2 { margin: 0; font-size: var(--f4); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    .link-btn { background: none; border: 0; color: var(--muted); font: inherit; font-size: var(--f4); cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+    .link-btn:hover { color: var(--text); }
+    .jobs { display: grid; gap: 10px; }
+
+    .empty {
+      border: 1.5px dashed var(--border);
+      border-radius: 14px;
+      padding: 38px 20px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty .big { width: 44px; height: 44px; margin: 0 auto 12px; border-radius: 12px; background: var(--panel); display: grid; place-items: center; }
+    .empty .big svg { width: 22px; height: 22px; }
+    .empty strong { display: block; color: var(--text); font-size: var(--f2); margin-bottom: 4px; }
+    .empty p { margin: 0; font-size: var(--f4); line-height: 1.5; }
+
+    .job {
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 20px;
+      padding: 12px 14px;
       display: grid;
-      gap: 14px;
+      grid-template-columns: 36px 1fr auto;
+      gap: 4px 12px;
+      align-items: center;
+      animation: pop .22s ease-out;
     }
-    label { font-size: var(--f4); color: var(--muted); display: block; margin-bottom: 6px; }
-    input, select {
-      width: 100%;
-      padding: 10px 12px;
-      background: var(--input-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-size: var(--f3);
-    }
-    button {
-      background: var(--accent);
-      color: #fff;
-      border: 0;
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: var(--f2);
-      font-weight: 600;
-      cursor: pointer;
-    }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.ghost {
-      background: var(--input-bg);
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-weight: 500;
-      font-size: var(--f4);
-      padding: 10px 12px;
-      white-space: nowrap;
-    }
-    .folder-row { display: flex; gap: 10px; align-items: flex-end; }
-    .folder-row > div { flex: 1; min-width: 0; }
-    #outDir {
-      cursor: default;
+    @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.985); } }
+    @media (prefers-reduced-motion: reduce) { .job { animation: none; } }
+    .job .badge { grid-row: 1 / span 2; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+    .job.done .badge { background: var(--ok-soft); color: var(--ok); }
+    .job.error .badge { background: var(--err-soft); color: var(--err); }
+    .job.cancelled .badge { background: var(--panel-2); color: var(--muted); }
+    .job .info { min-width: 0; }
+    .job .title { font-weight: 600; font-size: var(--f3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+    .job .meta { font-size: var(--f4); color: var(--muted); margin-top: 1px; display: flex; gap: 6px; align-items: center; white-space: nowrap; overflow: hidden; }
+    .job .meta .state { font-weight: 600; }
+    .job.done .meta .state { color: var(--ok); }
+    .job.error .meta .state { color: var(--err); }
+    .job .meta .detail { overflow: hidden; text-overflow: ellipsis; }
+    .job .acts { display: flex; gap: 6px; align-items: center; }
+    .bar-track { grid-column: 2 / span 2; height: 5px; background: var(--input-bg); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+    .bar-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px; transition: width .25s ease; }
+    .job.indeterminate .bar-fill { width: 35% !important; animation: slide 1.1s ease-in-out infinite; }
+    @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+    .job.done .bar-track, .job.cancelled .bar-track { display: none; }
+    .job.error .bar-fill { background: var(--err); }
+    .job.error .bar-track { display: none; }
+    .job .err-text { grid-column: 2 / span 2; font-size: var(--f4); color: var(--err); line-height: 1.4; word-break: break-word; user-select: text; -webkit-user-select: text; }
+    .job .log { grid-column: 1 / -1; display: none; margin-top: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--f5); color: var(--muted); max-height: 110px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; background: var(--input-bg); border-radius: 8px; padding: 8px 10px; }
+    .job.show-log .log { display: block; }
+
+    /* ---------- Status bar ---------- */
+    .statusbar {
+      flex: none;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 7px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bar);
+      font-size: var(--f5);
       color: var(--muted);
-      text-overflow: ellipsis;
-      overflow: hidden;
-      white-space: nowrap;
     }
-    .actions { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
-    .actions:empty { margin-top: 0; }
-    .open-btn {
-      display: inline-block;
-      background: var(--ok);
-      color: #06281d;
-      font-weight: 700;
-      border: 0;
-      padding: 10px 16px;
-      border-radius: 8px;
-      font-size: var(--f3);
-      cursor: pointer;
+    .statusbar a { color: var(--muted); }
+    .statusbar .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+    .statusbar .dot.busy { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .3; } }
+
+    /* ---------- Toast ---------- */
+    #toast {
+      position: fixed; left: 50%; bottom: 44px; transform: translate(-50%, 20px);
+      background: var(--text); color: var(--bg);
+      padding: 8px 14px; border-radius: 9px; font-size: var(--f4); font-weight: 500;
+      opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s;
+      box-shadow: 0 8px 24px var(--shadow);
     }
-    .open-btn.secondary { background: var(--border); color: var(--text); }
-    .open-btn:hover { filter: brightness(1.08); }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
     /* ---------- Settings dialog ---------- */
     dialog.settings {
@@ -146,198 +296,195 @@
       color: var(--text);
       border: 1px solid var(--border);
       border-radius: 14px;
-      padding: 22px 24px;
-      width: min(440px, 92vw);
+      padding: 0;
+      width: min(420px, 92vw);
       box-shadow: 0 24px 70px var(--shadow);
     }
-    dialog.settings::backdrop { background: rgba(0, 0, 0, 0.45); }
-    .settings-head {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 18px;
-    }
+    dialog.settings::backdrop { background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(3px); }
+    .settings-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 12px 20px; border-bottom: 1px solid var(--border); }
     .settings-head h2 { font-size: var(--f2); margin: 0; }
-    .dialog-close {
-      background: transparent; border: 0; color: var(--muted);
-      font-size: 18px; line-height: 1; cursor: pointer;
-      padding: 4px 9px; border-radius: 8px;
+    .settings .rows { padding: 6px 20px 12px; }
+    .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; }
+    .setting + .setting { border-top: 1px solid var(--border); }
+    .setting label { font-size: var(--f3); }
+    .setting select {
+      font: inherit; font-size: var(--f4);
+      background: var(--input-bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 10px; min-width: 140px; cursor: pointer;
     }
-    .dialog-close:hover { background: var(--input-bg); color: var(--text); }
-    .settings .grid { display: grid; gap: 16px; }
-
-    .disclaimer {
-      margin-top: 28px;
-      font-size: var(--f5);
-      line-height: 1.5;
-      color: var(--muted);
-      text-align: center;
-    }
-    .disclaimer a { color: var(--muted); }
-    .jobs { margin-top: 24px; display: grid; gap: 14px; }
-    .job {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-    }
-    .job .title { font-size: var(--f3); font-weight: 600; word-break: break-all; }
-    .job .meta { font-size: var(--f4); color: var(--muted); margin-top: 2px; }
-    .bar-track {
-      height: 10px;
-      background: var(--input-bg);
-      border-radius: 6px;
-      overflow: hidden;
-      margin: 12px 0 8px;
-    }
-    .bar-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.25s ease; }
-    .job.done .bar-fill { background: var(--ok); }
-    .job.error .bar-fill { background: var(--err); }
-    .status { font-size: var(--f4); display: flex; justify-content: space-between; gap: 8px; }
-    .status .state { font-weight: 600; }
-    .status.ok .state { color: var(--ok); }
-    .status.err .state { color: var(--err); }
-    .log {
-      margin-top: 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: var(--f5);
-      color: var(--muted);
-      max-height: 120px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
+    .disclaimer { padding: 12px 20px 16px; font-size: var(--f5); line-height: 1.5; color: var(--muted); border-top: 1px solid var(--border); }
+    .disclaimer a { color: var(--accent); }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="head">
-      <div>
-        <h1 data-i18n="title">YouTube → MP3/MP4</h1>
-        <p class="sub" data-i18n="subtitle">Desktop · běží lokálně z tvé IP</p>
-      </div>
-      <button id="gear" class="gear" type="button" title="Nastavení" aria-label="Nastavení">⚙</button>
+  <header class="toolbar" data-tauri-drag-region>
+    <div class="brand" data-tauri-drag-region>
+      <div class="logo"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+      <span>YT-mp</span>
     </div>
+    <div class="spacer" data-tauri-drag-region></div>
+    <button id="gear" class="icon-btn" type="button" data-i18n-title="settingsTitle" aria-label="Settings">
+      <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </header>
 
-    <dialog id="settings" class="settings">
-      <div class="settings-head">
-        <h2 data-i18n="settingsTitle">Nastavení</h2>
-        <button id="settingsClose" class="dialog-close" type="button" aria-label="Zavřít">✕</button>
-      </div>
-      <div class="grid">
-        <div>
-          <label for="setTheme" data-i18n="theme">Motiv</label>
-          <select id="setTheme">
-            <option value="system" data-i18n="themeSystem">Systém</option>
-            <option value="light" data-i18n="themeLight">Světlý</option>
-            <option value="dark" data-i18n="themeDark">Tmavý</option>
-          </select>
+  <main>
+    <div class="container">
+      <form id="form" class="composer" autocomplete="off">
+        <div class="url-row">
+          <svg class="i" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <input id="url" type="text" inputmode="url" spellcheck="false" autocapitalize="off" data-i18n-ph="urlPlaceholder" placeholder="https://youtu.be/…" />
+          <button id="paste" class="icon-btn" type="button" data-i18n-title="paste" aria-label="Paste">
+            <svg class="i" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+          </button>
         </div>
-        <div>
-          <label for="setFont" data-i18n="fontsize">Velikost písma</label>
-          <select id="setFont">
-            <option value="small" data-i18n="fsSmall">Malá</option>
-            <option value="medium" data-i18n="fsMedium">Střední</option>
-            <option value="large" data-i18n="fsLarge">Velká</option>
-          </select>
+        <div class="opts">
+          <div class="segmented" role="radiogroup" aria-label="Format">
+            <button type="button" role="radio" data-format="mp4" aria-checked="true">
+              <svg class="i" viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg>MP4
+            </button>
+            <button type="button" role="radio" data-format="mp3" aria-checked="false">
+              <svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>MP3
+            </button>
+          </div>
+          <button id="pick" type="button" class="folder-btn" data-i18n-title="changeFolder">
+            <svg class="i" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span><bdi id="outDir"></bdi></span>
+          </button>
+          <button id="submit" type="submit" class="btn primary">
+            <svg class="i" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+            <span data-i18n="convert">Stáhnout</span>
+          </button>
         </div>
-        <div>
-          <label for="setLang" data-i18n="language">Jazyk</label>
-          <select id="setLang">
-            <option value="cs">Čeština</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-      </div>
-    </dialog>
+      </form>
 
-    <form id="form">
-      <div>
-        <label for="url" data-i18n="urlLabel">YouTube URL</label>
-        <input id="url" type="url" data-i18n-ph="urlPlaceholder" placeholder="https://youtu.be/..." required />
-      </div>
-      <div>
-        <label for="format" data-i18n="formatLabel">Formát</label>
-        <select id="format">
-          <option value="mp3" data-i18n="mp3">MP3 (audio 320k)</option>
-          <option value="mp4" selected data-i18n="mp4">MP4 (video)</option>
+      <section>
+        <div class="section-head">
+          <h2 data-i18n="queue">Fronta</h2>
+          <button id="clear" class="link-btn" type="button" data-i18n="clearFinished" hidden>Vyčistit hotové</button>
+        </div>
+        <div id="jobs" class="jobs"></div>
+        <div id="empty" class="empty">
+          <div class="big"><svg class="i" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg></div>
+          <strong data-i18n="emptyTitle">Zatím nic ke stažení</strong>
+          <p data-i18n="emptyText">Vlož odkaz na video nebo playlist, případně ho sem přetáhni.</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="statusbar">
+    <span><span id="dot" class="dot"></span><span id="statusText"></span></span>
+    <span data-i18n="rights">Stahuj jen obsah, ke kterému máš práva.</span>
+  </footer>
+
+  <div id="toast" role="status"></div>
+
+  <dialog id="settings" class="settings">
+    <div class="settings-head">
+      <h2 data-i18n="settingsTitle">Nastavení</h2>
+      <button id="settingsClose" class="icon-btn" type="button" aria-label="Close">
+        <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="rows">
+      <div class="setting">
+        <label for="setTheme" data-i18n="theme">Motiv</label>
+        <select id="setTheme">
+          <option value="system" data-i18n="themeSystem">Systém</option>
+          <option value="light" data-i18n="themeLight">Světlý</option>
+          <option value="dark" data-i18n="themeDark">Tmavý</option>
         </select>
       </div>
-      <div class="folder-row">
-        <div>
-          <label for="outDir" data-i18n="folderLabel">Cílová složka</label>
-          <input id="outDir" type="text" readonly data-i18n-ph="folderPlaceholder" placeholder="Vyber složku…" />
-        </div>
-        <button id="pick" type="button" class="ghost" data-i18n="changeFolder">Změnit složku…</button>
+      <div class="setting">
+        <label for="setFont" data-i18n="fontsize">Velikost písma</label>
+        <select id="setFont">
+          <option value="small" data-i18n="fsSmall">Malá</option>
+          <option value="medium" data-i18n="fsMedium">Střední</option>
+          <option value="large" data-i18n="fsLarge">Velká</option>
+        </select>
       </div>
-      <button id="submit" type="submit" data-i18n="convert">Převést</button>
-    </form>
-
-    <div id="jobs" class="jobs"></div>
-
-    <p class="disclaimer" data-i18n="disclaimer" data-i18n-html="1">
-      Stahuj pouze obsah, ke kterému máš práva.
-    </p>
-  </div>
+      <div class="setting">
+        <label for="setLang" data-i18n="language">Jazyk</label>
+        <select id="setLang">
+          <option value="cs">Čeština</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+    </div>
+    <div class="disclaimer" data-i18n="disclaimer" data-i18n-html="1"></div>
+  </dialog>
 
   <script>
     /* ============================ i18n ============================ */
     const I18N = {
       cs: {
-        title: "YouTube → MP3/MP4",
-        subtitle: "Desktop · Rust jádro · yt-dlp · běží lokálně z tvé IP",
         settingsTitle: "Nastavení",
         theme: "Motiv", themeSystem: "Systém", themeLight: "Světlý", themeDark: "Tmavý",
         fontsize: "Velikost písma", fsSmall: "Malá", fsMedium: "Střední", fsLarge: "Velká",
         language: "Jazyk",
-        urlLabel: "YouTube URL (video nebo playlist)",
-        urlPlaceholder: "https://youtu.be/...",
-        formatLabel: "Formát",
-        mp3: "MP3 (audio 320k)", mp4: "MP4 (video)",
-        folderLabel: "Cílová složka",
-        folderPlaceholder: "Vyber složku…",
-        changeFolder: "Změnit složku…",
-        convert: "Převést",
+        urlPlaceholder: "Vlož odkaz na YouTube video nebo playlist…",
+        paste: "Vložit ze schránky",
+        changeFolder: "Změnit cílovou složku…",
+        convert: "Stáhnout",
+        queue: "Fronta", clearFinished: "Vyčistit hotové",
+        emptyTitle: "Zatím nic ke stažení",
+        emptyText: "Vlož odkaz na video nebo playlist, případně ho sem přetáhni.",
+        rights: "Stahuj jen obsah, ke kterému máš práva.",
         disclaimer: 'Stahuj pouze obsah, ke kterému máš práva. Respektuj <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">podmínky YouTube</a> a autorská práva. Soubory se ukládají do zvolené složky na tvém počítači.',
-        openFile: "▶ Otevřít soubor", reveal: "📂 Ukázat ve složce",
-        enqueuing: "Zařazuji…", queued: "Ve frontě",
-        st_starting: "Spouštím…", st_metadata: "Metadata", st_downloading: "Stahuji",
-        st_processing: "Zpracování", st_finished: "Hotovo", st_error: "Chyba", st_warning: "Varování",
-        doneDetail: "Hotovo",
+        openFile: "Otevřít", reveal: "Ve složce", cancel: "Zrušit", remove: "Odebrat", retry: "Znovu", log: "Podrobnosti",
+        enqueuing: "Zařazuji…",
+        st_starting: "Spouštím…", st_metadata: "Příprava", st_downloading: "Stahuji",
+        st_processing: "Zpracování", st_finished: "Hotovo", st_complete: "Hotovo", st_error: "Chyba", st_cancelled: "Zrušeno",
+        items: "položek",
+        idle: "Připraveno", busy: (n) => `Probíhá: ${n}`,
+        invalidUrl: "Zadej platný odkaz (http/https).",
+        pasteFail: "Schránku se nepodařilo přečíst — použij ⌘V / Ctrl+V.",
+        added: "Přidáno do fronty",
       },
       en: {
-        title: "YouTube → MP3/MP4",
-        subtitle: "Desktop · Rust core · yt-dlp · runs locally from your IP",
         settingsTitle: "Settings",
         theme: "Theme", themeSystem: "System", themeLight: "Light", themeDark: "Dark",
         fontsize: "Font size", fsSmall: "Small", fsMedium: "Medium", fsLarge: "Large",
         language: "Language",
-        urlLabel: "YouTube URL (video or playlist)",
-        urlPlaceholder: "https://youtu.be/...",
-        formatLabel: "Format",
-        mp3: "MP3 (audio 320k)", mp4: "MP4 (video)",
-        folderLabel: "Destination folder",
-        folderPlaceholder: "Choose a folder…",
-        changeFolder: "Change folder…",
-        convert: "Convert",
+        urlPlaceholder: "Paste a YouTube video or playlist link…",
+        paste: "Paste from clipboard",
+        changeFolder: "Change destination folder…",
+        convert: "Download",
+        queue: "Queue", clearFinished: "Clear finished",
+        emptyTitle: "Nothing downloaded yet",
+        emptyText: "Paste a video or playlist link, or drop it here.",
+        rights: "Only download content you have the rights to.",
         disclaimer: 'Only download content you have the rights to. Respect the <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">YouTube Terms</a> and copyright. Files are saved to the chosen folder on your computer.',
-        openFile: "▶ Open file", reveal: "📂 Show in folder",
-        enqueuing: "Queuing…", queued: "Queued",
-        st_starting: "Starting…", st_metadata: "Metadata", st_downloading: "Downloading",
-        st_processing: "Processing", st_finished: "Done", st_error: "Error", st_warning: "Warning",
-        doneDetail: "Done",
+        openFile: "Open", reveal: "Show in folder", cancel: "Cancel", remove: "Remove", retry: "Retry", log: "Details",
+        enqueuing: "Queuing…",
+        st_starting: "Starting…", st_metadata: "Preparing", st_downloading: "Downloading",
+        st_processing: "Processing", st_finished: "Done", st_complete: "Done", st_error: "Error", st_cancelled: "Cancelled",
+        items: "items",
+        idle: "Ready", busy: (n) => `Running: ${n}`,
+        invalidUrl: "Enter a valid link (http/https).",
+        pasteFail: "Couldn't read the clipboard — use ⌘V / Ctrl+V.",
+        added: "Added to queue",
       },
     };
     let lang = localStorage.getItem("ytmp.lang") || "cs";
-    function t(key) { return (I18N[lang] && I18N[lang][key]) || (I18N.cs[key]) || key; }
+    function t(key, ...a) {
+      const v = (I18N[lang] && I18N[lang][key]) ?? I18N.cs[key] ?? key;
+      return typeof v === "function" ? v(...a) : v;
+    }
     function applyLang() {
       document.documentElement.lang = lang;
       document.querySelectorAll("[data-i18n]").forEach((el) => {
-        const key = el.getAttribute("data-i18n");
-        if (el.hasAttribute("data-i18n-html")) el.innerHTML = t(key);
-        else el.textContent = t(key);
+        if (el.hasAttribute("data-i18n-html")) el.innerHTML = t(el.dataset.i18n);
+        else el.textContent = t(el.dataset.i18n);
       });
-      document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
-        el.setAttribute("placeholder", t(el.getAttribute("data-i18n-ph")));
+      document.querySelectorAll("[data-i18n-ph]").forEach((el) => el.setAttribute("placeholder", t(el.dataset.i18nPh)));
+      document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+        el.title = t(el.dataset.i18nTitle);
+        if (el.hasAttribute("aria-label")) el.setAttribute("aria-label", el.title);
       });
+      renderAll();
     }
 
     /* ===================== Tauri API (defensive) ===================== */
@@ -347,152 +494,242 @@
     const dialog = T.dialog || {};
     const opener = T.opener || {};
     const path = T.path || {};
+    const $ = (id) => document.getElementById(id);
+
+    const ICONS = {
+      mp4: '<svg class="i" viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg>',
+      mp3: '<svg class="i" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+      done: '<svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>',
+      error: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>',
+      cancelled: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>',
+      open: '<svg class="i" viewBox="0 0 24 24"><path d="M5 3l14 9-14 9z"/></svg>',
+      reveal: '<svg class="i" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+      x: '<svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+      retry: '<svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+      log: '<svg class="i" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></svg>',
+    };
+
+    /* ===================== Toast ===================== */
+    let toastTimer;
+    function toast(msg) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+    }
 
     /* ===================== Settings ===================== */
-    const gearBtn = document.getElementById("gear");
-    const settingsEl = document.getElementById("settings");
-    const setTheme = document.getElementById("setTheme");
-    const setFont = document.getElementById("setFont");
-    const setLang = document.getElementById("setLang");
+    const settingsEl = $("settings");
+    const setTheme = $("setTheme"), setFont = $("setFont"), setLang = $("setLang");
+    const resolveTheme = (th) => th === "system"
+      ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : th;
+    const applyTheme = (th) => { document.documentElement.dataset.theme = resolveTheme(th); };
 
-    function resolveTheme(theme) {
-      return theme === "system"
-        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-        : theme;
-    }
-    function applyTheme(theme) {
-      document.documentElement.dataset.theme = resolveTheme(theme);
-    }
-
-    // Init controls from storage.
     setTheme.value = localStorage.getItem("ytmp.theme") || "system";
     setFont.value = localStorage.getItem("ytmp.fontsize") || "medium";
     setLang.value = lang;
 
-    const settingsClose = document.getElementById("settingsClose");
-    function openSettings() { if (!settingsEl.open) settingsEl.showModal(); }
-    gearBtn.addEventListener("click", openSettings);
-    settingsClose.addEventListener("click", () => settingsEl.close());
-    // Klik mimo obsah (na backdrop) zavře dialog.
-    settingsEl.addEventListener("click", (e) => {
-      if (e.target === settingsEl) settingsEl.close();
-    });
-    // Nativní menu „Settings…" (macOS, ⌘,) otevře dialog nastavení.
+    const openSettings = () => { if (!settingsEl.open) settingsEl.showModal(); };
+    $("gear").addEventListener("click", openSettings);
+    $("settingsClose").addEventListener("click", () => settingsEl.close());
+    settingsEl.addEventListener("click", (e) => { if (e.target === settingsEl) settingsEl.close(); });
     if (listen) listen("ytmp:open-settings", openSettings);
-    setTheme.addEventListener("change", (e) => {
-      localStorage.setItem("ytmp.theme", e.target.value);
-      applyTheme(e.target.value);
-    });
-    setFont.addEventListener("change", (e) => {
-      localStorage.setItem("ytmp.fontsize", e.target.value);
-      document.documentElement.dataset.fontsize = e.target.value;
-    });
-    setLang.addEventListener("change", (e) => {
-      lang = e.target.value;
-      localStorage.setItem("ytmp.lang", lang);
-      applyLang();
-    });
-    // Reaguj na změnu systémového motivu, když je zvolen "Systém".
-    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    setTheme.addEventListener("change", (e) => { localStorage.setItem("ytmp.theme", e.target.value); applyTheme(e.target.value); });
+    setFont.addEventListener("change", (e) => { localStorage.setItem("ytmp.fontsize", e.target.value); document.documentElement.dataset.fontsize = e.target.value; });
+    setLang.addEventListener("change", (e) => { lang = e.target.value; localStorage.setItem("ytmp.lang", lang); applyLang(); });
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
       if ((localStorage.getItem("ytmp.theme") || "system") === "system") applyTheme("system");
     });
-
-    /* ===================== Jobs ===================== */
-    const form = document.getElementById("form");
-    const jobsEl = document.getElementById("jobs");
-    const outDirEl = document.getElementById("outDir");
-    const pickBtn = document.getElementById("pick");
-    const jobs = new Map();
-
-    async function initOutDir() {
-      const saved = localStorage.getItem("ytmp.outDir");
-      if (saved) { outDirEl.value = saved; return; }
-      try {
-        const dl = await path.join(await path.homeDir(), "Downloads");
-        outDirEl.value = dl;
-        localStorage.setItem("ytmp.outDir", dl);
-      } catch { /* necháme prázdné */ }
-    }
-
-    pickBtn.addEventListener("click", async () => {
-      if (!dialog.open) return;
-      const dir = await dialog.open({ directory: true, multiple: false, defaultPath: outDirEl.value || undefined });
-      if (typeof dir === "string") {
-        outDirEl.value = dir;
-        localStorage.setItem("ytmp.outDir", dir);
-      }
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); openSettings(); }
+    });
+    // Desktopový pocit: žádné webové kontextové menu (kromě textových polí).
+    document.addEventListener("contextmenu", (e) => {
+      if (!e.target.closest("input, .log, .title")) e.preventDefault();
     });
 
-    function createJobCard(url, format) {
-      const card = document.createElement("div");
-      card.className = "job";
-      card.innerHTML = `
-        <div class="title"></div>
-        <div class="meta">${format.toUpperCase()} · ${url}</div>
-        <div class="bar-track"><div class="bar-fill"></div></div>
-        <div class="status"><span class="state">…</span><span class="detail"></span></div>
-        <div class="actions"></div>
-        <div class="log"></div>`;
-      card.querySelector(".title").textContent = url;
-      jobsEl.prepend(card);
-      return {
-        card,
-        title: card.querySelector(".title"),
-        fill: card.querySelector(".bar-fill"),
-        status: card.querySelector(".status"),
-        state: card.querySelector(".state"),
-        detail: card.querySelector(".detail"),
-        actions: card.querySelector(".actions"),
-        log: card.querySelector(".log"),
-        filepath: null,
-      };
+    /* ===================== Formát + složka ===================== */
+    let format = localStorage.getItem("ytmp.format") || "mp4";
+    const segBtns = document.querySelectorAll(".segmented button");
+    function setFormat(f) {
+      format = f;
+      localStorage.setItem("ytmp.format", f);
+      segBtns.forEach((b) => b.setAttribute("aria-checked", String(b.dataset.format === f)));
+    }
+    segBtns.forEach((b) => b.addEventListener("click", () => setFormat(b.dataset.format)));
+    setFormat(format);
+
+    const outDirEl = $("outDir");
+    let outDir = localStorage.getItem("ytmp.outDir") || "";
+    function showOutDir() { outDirEl.textContent = outDir; }
+    async function initOutDir() {
+      if (!outDir) {
+        try {
+          outDir = await path.join(await path.homeDir(), "Downloads");
+          localStorage.setItem("ytmp.outDir", outDir);
+        } catch { /* necháme prázdné */ }
+      }
+      showOutDir();
+    }
+    async function pickFolder() {
+      if (!dialog.open) return;
+      const dir = await dialog.open({ directory: true, multiple: false, defaultPath: outDir || undefined });
+      if (typeof dir === "string") {
+        outDir = dir;
+        localStorage.setItem("ytmp.outDir", dir);
+        showOutDir();
+      }
+      return outDir;
+    }
+    $("pick").addEventListener("click", pickFolder);
+
+    /* ===================== URL vstup ===================== */
+    const urlEl = $("url");
+    const composer = $("form");
+    function normalizeUrl(s) {
+      s = (s || "").trim();
+      if (!s) return null;
+      if (!/^https?:\/\//i.test(s) && /^(www\.|youtu\.be|youtube\.com|m\.youtube\.com|music\.youtube\.com)/i.test(s)) s = "https://" + s;
+      try { const u = new URL(s); return /^https?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
+    }
+    $("paste").addEventListener("click", async () => {
+      try {
+        const txt = await navigator.clipboard.readText();
+        if (txt) { urlEl.value = txt.trim(); urlEl.focus(); }
+      } catch { toast(t("pasteFail")); urlEl.focus(); }
+    });
+    // Drag & drop odkazu (text/uri-list) do okna.
+    ["dragenter", "dragover"].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); composer.classList.add("drag"); }));
+    ["dragleave", "drop"].forEach((ev) => document.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && e.relatedTarget) return;
+      composer.classList.remove("drag");
+    }));
+    document.addEventListener("drop", (e) => {
+      const txt = e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("text/plain");
+      if (txt) { urlEl.value = txt.split("\n").find((l) => l && !l.startsWith("#"))?.trim() || ""; urlEl.focus(); }
+    });
+    // Libovolný stisk písmena/⌘V mimo pole = vložit do pole URL.
+    document.addEventListener("keydown", (e) => {
+      if (settingsEl.open || e.target.closest("input, select, textarea")) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "v") urlEl.focus();
+    });
+
+    /* ===================== Joby ===================== */
+    /** @type {Map<string, Job>} řazeno od nejnovějšího (vkládáme na začátek) */
+    let jobs = [];
+    const byRemote = new Map(); // job_id (z Rustu) -> job
+    const HIST_KEY = "ytmp.history";
+    let seq = 0;
+
+    function saveHistory() {
+      try {
+        const keep = jobs.filter((j) => j.state !== "running").slice(0, 50)
+          .map(({ id, url, format, title, state, filepath, error, count }) => ({ id, url, format, title, state, filepath, error, count }));
+        localStorage.setItem(HIST_KEY, JSON.stringify(keep));
+      } catch { /* ignore */ }
+    }
+    function loadHistory() {
+      try {
+        jobs = (JSON.parse(localStorage.getItem(HIST_KEY)) || []).map((j) => ({ ...j, progress: 100, detail: "", log: "", showLog: false }));
+        seq = jobs.length;
+      } catch { jobs = []; }
     }
 
-    function appendLog(ui, obj) {
-      ui.log.textContent += JSON.stringify(obj) + "\n";
-      ui.log.scrollTop = ui.log.scrollHeight;
+    function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+    function btn(cls, icon, label, action, extra = "") {
+      return `<button class="btn small ${cls}" data-action="${action}" ${extra}>${icon}${esc(label)}</button>`;
     }
 
-    function addOpenButtons(ui) {
-      const openFile = document.createElement("button");
-      openFile.className = "open-btn";
-      openFile.textContent = t("openFile");
-      openFile.onclick = () => ui.filepath && opener.openPath && opener.openPath(ui.filepath);
+    function renderJob(j) {
+      let el = document.querySelector(`.job[data-id="${j.id}"]`);
+      const created = !el;
+      if (created) {
+        el = document.createElement("div");
+        el.dataset.id = j.id;
+        el.innerHTML = `
+          <div class="badge"></div>
+          <div class="info"><div class="title"></div><div class="meta"></div></div>
+          <div class="acts"></div>
+          <div class="bar-track"><div class="bar-fill"></div></div>
+          <div class="err-text" hidden></div>
+          <div class="log"></div>`;
+        $("jobs").prepend(el);
+      }
+      const running = j.state === "running";
+      el.className = `job ${j.state}${running && !(j.progress > 0) ? " indeterminate" : ""}${j.showLog ? " show-log" : ""}`;
+      el.querySelector(".badge").innerHTML = j.state === "done" ? ICONS.done : j.state === "error" ? ICONS.error : j.state === "cancelled" ? ICONS.cancelled : ICONS[j.format];
+      const titleEl = el.querySelector(".title");
+      if (titleEl.textContent !== (j.title || j.url)) titleEl.textContent = j.title || j.url;
 
-      const reveal = document.createElement("button");
-      reveal.className = "open-btn secondary";
-      reveal.textContent = t("reveal");
-      reveal.onclick = () => ui.filepath && opener.revealItemInDir && opener.revealItemInDir(ui.filepath);
+      const stateLabel = t("st_" + (j.status || "starting"));
+      const parts = [`<span class="state">${esc(j.state === "running" ? stateLabel : t("st_" + (j.state === "done" ? "finished" : j.state)))}</span>`, `<span>${j.format.toUpperCase()}</span>`];
+      if (j.count > 1) parts.push(`<span>${j.count} ${t("items")}</span>`);
+      if (running && j.detail) parts.push(`<span class="detail">${esc(j.detail)}</span>`);
+      el.querySelector(".meta").innerHTML = parts.join('<span>·</span>');
+      el.querySelector(".bar-fill").style.width = (j.progress || 0) + "%";
 
-      ui.actions.appendChild(openFile);
-      ui.actions.appendChild(reveal);
+      const err = el.querySelector(".err-text");
+      err.hidden = j.state !== "error" || !j.error;
+      err.textContent = j.error || "";
+
+      const acts = el.querySelector(".acts");
+      let html = "";
+      if (running) html += btn("soft", ICONS.x, t("cancel"), "cancel");
+      if (j.state === "done" && j.filepath) {
+        html += btn("soft", ICONS.open, t("openFile"), "open") + btn("soft", ICONS.reveal, t("reveal"), "reveal");
+      }
+      if (j.state === "error" || j.state === "cancelled") html += btn("soft", ICONS.retry, t("retry"), "retry");
+      if (!running) html += `<button class="icon-btn" data-action="remove" title="${esc(t("remove"))}" aria-label="${esc(t("remove"))}">${ICONS.x}</button>`;
+      else html += `<button class="icon-btn" data-action="log" title="${esc(t("log"))}" aria-label="${esc(t("log"))}">${ICONS.log}</button>`;
+      if (acts.innerHTML !== html) acts.innerHTML = html;
+
+      const log = el.querySelector(".log");
+      if (j.showLog && log.textContent !== j.log) { log.textContent = j.log; log.scrollTop = log.scrollHeight; }
     }
 
-    function applyEvent(ui, ev) {
-      ui.state.textContent = t("st_" + ev.status) || ev.status;
+    function updateChrome() {
+      const running = jobs.filter((j) => j.state === "running").length;
+      $("empty").hidden = jobs.length > 0;
+      $("clear").hidden = !jobs.some((j) => j.state !== "running");
+      $("dot").classList.toggle("busy", running > 0);
+      $("statusText").textContent = running ? t("busy", running) : t("idle");
+    }
+    function renderAll() {
+      document.querySelectorAll(".job").forEach((n) => n.remove());
+      [...jobs].reverse().forEach(renderJob);
+      updateChrome();
+    }
+
+    function applyEvent(j, ev) {
+      j.status = ev.status;
       switch (ev.status) {
         case "metadata":
-          if (ev.title) ui.title.textContent = ev.title;
+          if (ev.title) j.title = ev.title;
+          j.progress = 0; j.detail = "";
           break;
         case "downloading":
-          ui.fill.style.width = (ev.progress || 0) + "%";
-          ui.detail.textContent = `${ev.progress?.toFixed(1) ?? 0}% · ${ev.speed || ""} · ETA ${ev.eta || ""}`;
+          j.progress = ev.progress || 0;
+          j.detail = [`${(ev.progress ?? 0).toFixed(0)}%`, ev.speed, ev.eta && `ETA ${ev.eta}`].filter(Boolean).join(" · ");
           break;
         case "processing":
-          ui.detail.textContent = ev.postprocessor || "";
+          j.progress = 100; j.detail = ev.postprocessor || "";
           break;
         case "finished":
-          ui.fill.style.width = "100%";
-          ui.card.classList.add("done");
-          ui.status.classList.add("ok");
-          ui.detail.textContent = t("doneDetail");
-          ui.filepath = ev.filepath || null;
-          if (ui.filepath) addOpenButtons(ui);
+          j.count = (j.count || 0) + 1;
+          j.filepath = ev.filepath || j.filepath;
+          j.progress = 100;
+          break;
+        case "complete":
+          j.state = "done"; j.progress = 100; j.detail = "";
           break;
         case "error":
-          ui.card.classList.add("error");
-          ui.status.classList.add("err");
-          ui.detail.textContent = ev.error || "";
+          j.state = "error"; j.error = ev.error || "";
+          break;
+        case "cancelled":
+          j.state = "cancelled";
           break;
       }
     }
@@ -500,42 +737,79 @@
     if (listen) {
       listen("ytmp:progress", (event) => {
         const { job_id, data } = event.payload;
-        const ui = jobs.get(job_id);
-        if (!ui) return;
+        const j = byRemote.get(job_id);
+        if (!j) return;
         let ev;
         try { ev = JSON.parse(data); } catch { return; }
-        appendLog(ui, ev);
-        applyEvent(ui, ev);
-        if (ev.status === "finished" || ev.status === "error") jobs.delete(job_id);
+        j.log += JSON.stringify(ev) + "\n";
+        applyEvent(j, ev);
+        if (j.state !== "running") { byRemote.delete(job_id); saveHistory(); }
+        renderJob(j);
+        updateChrome();
       });
     }
 
-    async function submitJob(url, format, outputDir) {
-      const ui = createJobCard(url, format);
-      ui.state.textContent = t("enqueuing");
+    async function startJob(j) {
+      Object.assign(j, { state: "running", status: "starting", progress: 0, detail: t("enqueuing"), error: "", log: "", count: 0 });
+      renderJob(j); updateChrome();
       try {
-        const jobId = await invoke("start_job", { url, format, outputDir, browser: null });
-        jobs.set(jobId, ui);
+        const remote = await invoke("start_job", { url: j.url, format: j.format, outputDir: outDir, browser: null });
+        j.remote = remote;
+        byRemote.set(remote, j);
+        // Zrušeno dřív, než dorazil job_id.
+        if (j.cancelRequested) invoke("cancel_job", { jobId: remote });
       } catch (e) {
-        ui.card.classList.add("error");
-        ui.status.classList.add("err");
-        ui.state.textContent = t("st_error");
-        ui.detail.textContent = String(e);
+        Object.assign(j, { state: "error", error: String(e) });
+        saveHistory();
+        renderJob(j); updateChrome();
       }
     }
 
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const url = document.getElementById("url").value.trim();
-      const format = document.getElementById("format").value;
-      const outputDir = outDirEl.value.trim();
-      if (!outputDir) { pickBtn.click(); return; }
-      if (url) submitJob(url, format, outputDir);
+    async function submit() {
+      const url = normalizeUrl(urlEl.value);
+      if (!url) { toast(t("invalidUrl")); urlEl.focus(); return; }
+      if (!outDir && !(await pickFolder())) return;
+      const j = { id: "j" + Date.now() + "-" + (seq++), url, format, title: "", log: "", showLog: false };
+      jobs.unshift(j);
+      urlEl.value = "";
+      startJob(j);
+    }
+    composer.addEventListener("submit", (e) => { e.preventDefault(); submit(); });
+
+    $("jobs").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-action]");
+      if (!b) return;
+      const j = jobs.find((x) => x.id === b.closest(".job").dataset.id);
+      if (!j) return;
+      switch (b.dataset.action) {
+        case "cancel":
+          j.cancelRequested = true;
+          if (j.remote) invoke("cancel_job", { jobId: j.remote });
+          break;
+        case "open": j.filepath && opener.openPath?.(j.filepath); break;
+        case "reveal": j.filepath && opener.revealItemInDir?.(j.filepath); break;
+        case "retry": j.cancelRequested = false; startJob(j); break;
+        case "log": j.showLog = !j.showLog; renderJob(j); break;
+        case "remove":
+          jobs = jobs.filter((x) => x !== j);
+          b.closest(".job").remove();
+          saveHistory(); updateChrome();
+          break;
+      }
+    });
+    $("clear").addEventListener("click", () => {
+      jobs = jobs.filter((j) => j.state === "running");
+      saveHistory(); renderAll();
     });
 
-    // První vykreslení.
+    // Při návratu do okna zaostři na pole URL, pokud nic jiného nemá fokus.
+    window.addEventListener("focus", () => { if (!settingsEl.open && document.activeElement === document.body) urlEl.focus(); });
+
+    // Start.
+    loadHistory();
     applyLang();
     initOutDir();
+    urlEl.focus();
   </script>
 </body>
 </html>

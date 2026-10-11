@@ -12,12 +12,14 @@
       {
         "label": "main",
         "title": "YT-mp — YouTube → MP3/MP4",
-        "width": 820,
-        "height": 940,
-        "minWidth": 820,
-        "minHeight": 820,
-        "maxWidth": 1200,
-        "maxHeight": 1500
+        "width": 760,
+        "height": 720,
+        "minWidth": 560,
+        "minHeight": 520,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

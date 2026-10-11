@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::oneshot;
 
 /// Payload události průběhu (jeden NDJSON řetězec pro frontend).
 #[derive(Clone, Serialize)]
@@ -101,6 +102,7 @@ pub async fn run_job(
     format: String,
     output_dir: String,
     browser: Option<String>,
+    mut cancel: oneshot::Receiver<()>,
 ) {
     let ytdlp = match resolve_sidecar("yt-dlp") {
         Some(p) => p,
@@ -137,7 +139,7 @@ pub async fn run_job(
         .arg(format!("postprocess:{TAG_PP}%(progress.postprocessor)s"))
         .arg("--print")
         .arg(format!(
-            "before_dl:{TAG_JSON}{{\"status\":\"metadata\",\"title\":%(title)j,\"duration\":%(duration)j}}"
+            "before_dl:{TAG_JSON}{{\"status\":\"metadata\",\"title\":%(title)j,\"duration\":%(duration)j,\"filename\":%(filename)j}}"
         ))
         .arg("--print")
         .arg(format!(
@@ -215,11 +217,25 @@ pub async fn run_job(
     });
 
     // STDOUT: metadata / finished (@@J@@) a průběh stahování (@@D@@).
+    // Současně čekáme na zrušení úlohy (tlačítko Zrušit) -> zabijeme yt-dlp.
     let mut saw_finished = false;
     let mut saw_error = false;
+    let mut cancelled = false;
+    let mut current_file: Option<String> = None; // rozdělané stahování (pro úklid při zrušení)
     if let Some(stdout) = stdout {
         let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
+        loop {
+            let line = tokio::select! {
+                l = lines.next_line() => match l {
+                    Ok(Some(l)) => l,
+                    _ => break,
+                },
+                _ = &mut cancel => {
+                    cancelled = true;
+                    let _ = child.kill().await;
+                    break;
+                }
+            };
             let t = line.trim();
             if let Some(rest) = t.strip_prefix(TAG_JSON) {
                 if rest.contains("\"finished\"") {
@@ -227,6 +243,11 @@ pub async fn run_job(
                 }
                 if rest.contains("\"error\"") {
                     saw_error = true;
+                }
+                if rest.contains("\"metadata\"") {
+                    current_file = serde_json::from_str::<Value>(rest)
+                        .ok()
+                        .and_then(|v| v.get("filename").and_then(|f| f.as_str()).map(String::from));
                 }
                 emit_line(&app, &job_id, rest.to_string());
             } else if let Some(rest) = t.strip_prefix(TAG_DL) {
@@ -257,22 +278,53 @@ pub async fn run_job(
     let status = child.wait().await;
     let errors = stderr_handle.await.unwrap_or_default();
 
+    if cancelled {
+        if let Some(f) = current_file {
+            remove_partials(&f);
+        }
+        emit_line(&app, &job_id, json!({ "status": "cancelled" }).to_string());
+        return;
+    }
+
     let failed = matches!(&status, Ok(s) if !s.success()) || status.is_err();
-    if (failed || (!saw_finished && !saw_error)) && !saw_error {
-        // Doplň chybu jen pokud opravdu nedoběhlo úspěšně.
-        if failed && !saw_finished {
-            let msg = errors
-                .trim()
-                .lines()
-                .last()
-                .map(|l| l.trim_start_matches("ERROR:").trim().to_string())
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| "Stahování selhalo.".to_string());
-            emit_line(
-                &app,
-                &job_id,
-                json!({ "status": "error", "error": msg }).to_string(),
-            );
+    if saw_error {
+        return;
+    }
+    if failed && !saw_finished {
+        let msg = errors
+            .trim()
+            .lines()
+            .last()
+            .map(|l| l.trim_start_matches("ERROR:").trim().to_string())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| "Stahování selhalo.".to_string());
+        emit_line(
+            &app,
+            &job_id,
+            json!({ "status": "error", "error": msg }).to_string(),
+        );
+    } else {
+        // Celá úloha (včetně všech položek playlistu) doběhla.
+        emit_line(&app, &job_id, json!({ "status": "complete" }).to_string());
+    }
+}
+
+/// Smaže nedokončené soubory zrušeného stahování: `<název>*.part`, `*.ytdl`
+/// a `*.temp` (včetně dílčích streamů typu `<název>.f137.mp4.part`).
+fn remove_partials(filename: &str) {
+    let path = std::path::Path::new(filename);
+    let (Some(dir), Some(stem)) = (path.parent(), path.file_stem().and_then(|s| s.to_str())) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let partial = name.ends_with(".part") || name.ends_with(".ytdl") || name.ends_with(".temp");
+        if partial && name.starts_with(stem) {
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }

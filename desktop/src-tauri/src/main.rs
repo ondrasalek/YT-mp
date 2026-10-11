@@ -3,13 +3,22 @@
 
 mod downloader;
 
-use tauri::Emitter;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use tauri::{Emitter, Manager, State};
+use tokio::sync::oneshot;
+
+/// Běžící úlohy -> kanál pro jejich zrušení.
+#[derive(Default)]
+struct Jobs(Mutex<HashMap<String, oneshot::Sender<()>>>);
 
 /// Spustí novou konverzní úlohu. Vrací `job_id`, pod kterým frontend
 /// odebírá události `ytmp:progress`.
 #[tauri::command]
 async fn start_job(
     app: tauri::AppHandle,
+    jobs: State<'_, Jobs>,
     url: String,
     format: String,
     output_dir: String,
@@ -23,10 +32,21 @@ async fn start_job(
     }
     let job_id = uuid::Uuid::new_v4().to_string();
     let id = job_id.clone();
+    let (tx, rx) = oneshot::channel();
+    jobs.0.lock().unwrap().insert(job_id.clone(), tx);
     tauri::async_runtime::spawn(async move {
-        downloader::run_job(app, id, url, format, output_dir, browser).await;
+        downloader::run_job(app.clone(), id.clone(), url, format, output_dir, browser, rx).await;
+        app.state::<Jobs>().0.lock().unwrap().remove(&id);
     });
     Ok(job_id)
+}
+
+/// Zruší běžící úlohu (zabije yt-dlp proces).
+#[tauri::command]
+fn cancel_job(jobs: State<'_, Jobs>, job_id: String) {
+    if let Some(tx) = jobs.0.lock().unwrap().remove(&job_id) {
+        let _ = tx.send(());
+    }
 }
 
 /// Vlastní menu pro macOS: do app menu (vedle  Apple) přidá „Settings…"
@@ -85,7 +105,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![start_job])
+        .manage(Jobs::default())
+        .invoke_handler(tauri::generate_handler![start_job, cancel_job])
         .setup(|app| {
             // Vlastní menu jen na macOS (jiné platformy mají gear v okně).
             #[cfg(target_os = "macos")]
