@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Not sandboxed: YT-mp runs the bundled yt-dlp and ffmpeg and writes to any folder the user picks. -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- The bundled yt-dlp / ffmpeg are signed by other parties; they run as separate processes, so this only
+         matters for anything loaded into the app itself. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

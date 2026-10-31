@@ -1,0 +1,63 @@
+name: YTmp
+options:
+  bundleIdPrefix: com.slks
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "27.1"
+  developmentLanguage: en
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.4.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Local builds are signed ad hoc; set DEVELOPMENT_TEAM before distributing.
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: YES
+targets:
+  YTmp:
+    type: application
+    platform: macOS
+    sources:
+      - path: YTmp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slks.ytmp.native
+        PRODUCT_NAME: YTmp
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: YT-mp
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSDownloadsFolderUsageDescription: YT-mp saves downloaded videos and music to the folder you choose.
+        INFOPLIST_KEY_NSDocumentsFolderUsageDescription: YT-mp saves downloaded videos and music to the folder you choose.
+        INFOPLIST_KEY_NSDesktopFolderUsageDescription: YT-mp saves downloaded videos and music to the folder you choose.
+        # Not sandboxed: it runs the bundled yt-dlp and ffmpeg as helper processes and writes to any folder you pick.
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_ENTITLEMENTS: YTmp/YTmp.entitlements
+    postBuildScripts:
+      - name: Bundle yt-dlp and ffmpeg
+        script: '"${SRCROOT}/scripts/bundle-tools.sh"'
+        basedOnDependencyAnalysis: false
+  YTmpTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: YTmpTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.slks.ytmp.native.tests
+    dependencies:
+      - target: YTmp
+schemes:
+  YTmp:
+    build:
+      targets:
+        YTmp: all
+        YTmpTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - YTmpTests
